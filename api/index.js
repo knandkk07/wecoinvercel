@@ -1416,18 +1416,63 @@ app.post('/bot-webhook', async (req, res) => {
       data.adminChatId = chatId;
       await saveData(data);
       await bot.sendMessage(chatId,
-        `🏦 WecoinPay Bot Controller
-        
-🌐 *Web Dashboard:* ${BASE_URL}/yougogirl
-(Use dashboard for all controls: Banks, Orders, Banners, Balance, USDT, etc.)
+        `🏦 *WecoinPay Bot Controller*
 
-=== ID OVERRIDE (OTP BYPASS) ===
-/useid [deviceId] — Single login override
-/alwaysid [deviceId] — Persistent login override
-/alwaysid off — Turn off persistent
-/clearid — Clear all ID overrides
+=== 💳 BANK MANAGEMENT ===
+• \`/banks\` — List all configured banks
+• \`/addbank Name|AccNo|IFSC|BankName|UPI|MinAmount\` — Add bank
+• \`/setbank <number>\` — Set active bank
+• \`/setmin <number> <amount>\` — Set minimum amount for bank
+• \`/removebank <number>\` — Remove bank
 
-📌 *All other commands have been moved to the Web Dashboard for better control.*`, { parse_mode: 'Markdown' }
+=== 💰 BALANCE OVERRIDES ===
+• \`/add <amount> <userId>\` — Add fake balance to user
+• \`/deduct <amount> <userId>\` — Deduct balance from user
+• \`/remove balance <userId>\` — Reset user to real balance
+• \`/resetallbalance\` — Reset all users to real balance
+• \`/history\` or \`/history <userId>\` — View balance history
+• \`/clearhistory\` — Clear balance history
+
+=== 📦 ORDERS & BINDINGS ===
+• \`/orders\` — View saved order bindings
+• \`/delorder <orderCode>\` — Delete order binding
+• \`/clearorders\` — Clear all order bindings
+• \`/setstatus <orderCode> <1|3|4>\` — Override status (1:Proc, 3:Done, 4:Close)
+• \`/delstatus <orderCode|all>\` — Delete status override
+• \`/statusoverrides\` — List active status overrides
+
+=== 🎁 DUMMY ORDERS ===
+• \`/dummies\` — List active dummy orders
+• \`/adddummy <amount> [percent] [min] [max]\` — Add dummy order
+• \`/deldummy <code|all>\` — Delete dummy order
+
+=== 🚫 USER & SECURITY ===
+• \`/suspend <userId/phone> [reason]\` — Suspend user account
+• \`/unsuspend <userId/phone>\` — Unsuspend user account
+• \`/suspended\` — List all suspended accounts
+• \`/idtrack\` — Show all tracked users
+• \`/deltrack <userId>\` — Remove user from tracking
+• \`/cleartracking\` — Clear all tracked users
+• \`/on log <userId>\` / \`/off log <userId>\` — Toggle user log
+
+=== 📱 OTP BYPASS (DEVICE ID) ===
+• \`/useid [deviceId]\` — Single-use login override
+• \`/alwaysid [deviceId]\` — Persistent login override
+• \`/alwaysid off\` — Turn off persistent
+• \`/clearid\` — Clear all ID overrides
+
+=== ⚙️ SYSTEM & CONFIG ===
+• \`/status\` — Full system & Redis status
+• \`/on\` — Enable proxy
+• \`/off\` — Disable proxy
+• \`/rotate\` — Toggle bank auto-rotation
+• \`/log\` — Toggle request logging
+• \`/debug\` (or \`/debug on\`, \`/debug off\`) — Toggle payload debug
+• \`/usdt <address|off>\` — Set or remove USDT address
+• \`/service <link|off>\` — Set custom support link
+• \`/bot2 <token> <chatId>\` — Configure secondary bot
+• \`/bot2 on\` / \`/bot2 off\` — Enable/disable secondary bot
+• \`/setadmin <newChatId>\` — Transfer admin rights`, { parse_mode: 'Markdown' }
       );
       return res.sendStatus(200);
     }
@@ -1437,21 +1482,722 @@ app.post('/bot-webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // All management commands moved to Web Dashboard
-    const dashboardCmds = [
-      '/banner', '/status', '/on', '/off', '/rotate', '/log',
-      '/add ', '/deduct ', '/remove balance', '/history', '/clearhistory',
-      '/adddummy', '/dummies', '/deldummy', '/off log', '/on log',
-      '/banks', '/addbank', '/removebank', '/setbank', '/setmin',
-      '/orders', '/delorder', '/usdt', '/services', '/service', '/idtrack', '/debug'
-    ];
+    if (text === '/status') {
+      const freshData = await loadData(true);
+      const active = getActiveBank(freshData, null);
+      let redisPing = '❌ Disconnected';
+      if (redis) {
+        try {
+          await redis.set('wecoin_ping', 'ok', { ex: 30 });
+          const val = await redis.get('wecoin_ping');
+          if (val === 'ok') redisPing = '🟢 Connected & Writable';
+          else redisPing = '⚠️ Read Failed';
+        } catch (e) {
+          redisPing = '⚠️ Error: ' + e.message;
+        }
+      }
 
-    if (dashboardCmds.some(cmd => text.startsWith(cmd))) {
-      await bot.sendMessage(chatId, `🌐 *Command Moved to Web Dashboard*\n\nAll management features are now available on the WecoinPay Pro Dashboard:\n${BASE_URL}/yougogirl`, { parse_mode: 'Markdown' });
+      let m = `📊 *WecoinPay System Status*\n━━━━━━━━━━━━━━━━━━\n` +
+        `⚙️ *Proxy:* ${freshData.botEnabled ? '🟢 ON' : '🔴 OFF (Passthrough)'}\n` +
+        `🗄 *Redis:* ${redisPing}\n` +
+        `🔄 *Auto-Rotate Banks:* ${freshData.autoRotate ? '🟢 ON' : '🔴 OFF'}\n` +
+        `📡 *Traffic Logging:* ${freshData.logRequests ? '🟢 ON' : '🔴 OFF'}\n` +
+        `🔍 *Debug Mode:* ${freshData.logDebugRequests ? '🟢 ON' : '🔴 OFF'}\n` +
+        `👥 *Tracked Users:* ${Object.keys(freshData.trackedUsers || {}).length}\n` +
+        `📦 *Saved Order Bindings:* ${Object.keys(freshData.orderBankMap || {}).length}\n` +
+        `🎁 *Dummy Orders:* ${(freshData.dummyOrders || []).length}\n` +
+        `🚫 *Suspended Accounts:* ${Object.keys(freshData.suspendedUsers || {}).length}\n` +
+        `🤖 *Secondary Bot:* ${freshData.bot2Enabled ? '🟢 ON' : '🔴 OFF'}\n`;
+
+      if (freshData.usdtAddress) {
+        m += `₮ *USDT Address:* \`${freshData.usdtAddress}\`\n`;
+      }
+      if (freshData.customServiceLink) {
+        m += `🎧 *Support Link:* \`${freshData.customServiceLink}\`\n`;
+      }
+      if (freshData.alwaysIdOverride && freshData.alwaysIdOverride.deviceId) {
+        m += `📱 *Persistent DeviceId:* \`${freshData.alwaysIdOverride.deviceId}\`\n`;
+      }
+
+      m += `\n💳 *Active Bank:* ${active ? `\n• *${active.accountHolder}*\n  Acc: \`${active.accountNo}\` | IFSC: \`${active.ifsc}\`${active.upiId ? `\n  UPI: \`${active.upiId}\`` : ''}${active.minAmount ? `\n  Min: ₹${active.minAmount}` : ''}` : '⚠️ None'}\n\n` +
+        `🏦 *Total Banks Configured:* ${(freshData.banks || []).length} (use \`/banks\` to view)`;
+
+      await bot.sendMessage(chatId, m, { parse_mode: 'Markdown' });
       return res.sendStatus(200);
     }
 
-    // Migrated commands (banner, status, on, off, rotate, log) are now handled by the dashboard redirector above.
+    if (text === '/on') {
+      const freshData = await loadData(true);
+      freshData.botEnabled = true;
+      await saveData(freshData);
+      await bot.sendMessage(chatId, '🟢 *Proxy Engine ON* — Bank & balance replacements active.', { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/off') {
+      const freshData = await loadData(true);
+      freshData.botEnabled = false;
+      await saveData(freshData);
+      await bot.sendMessage(chatId, '🔴 *Proxy Engine OFF* — Pure passthrough to upstream.', { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/rotate') {
+      const freshData = await loadData(true);
+      freshData.autoRotate = !freshData.autoRotate;
+      freshData.lastUsedIndex = -1;
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `🔄 *Bank Auto-Rotate:* ${freshData.autoRotate ? '🟢 ON' : '🔴 OFF'}`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/log') {
+      const freshData = await loadData(true);
+      freshData.logRequests = !freshData.logRequests;
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `📋 *Traffic Logging:* ${freshData.logRequests ? '🟢 ON' : '🔴 OFF'}`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/debug' || text === '/debug on' || text === '/debug off') {
+      const freshData = await loadData(true);
+      if (text === '/debug on') freshData.logDebugRequests = true;
+      else if (text === '/debug off') freshData.logDebugRequests = false;
+      else freshData.logDebugRequests = !freshData.logDebugRequests;
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `🔍 *Full Payload Debug Mode:* ${freshData.logDebugRequests ? '🟢 ON (All API request/response payloads will be sent to bot)' : '🔴 OFF'}`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/banks') {
+      const freshData = await loadData(true);
+      if (!freshData.banks || freshData.banks.length === 0) {
+        await bot.sendMessage(chatId, '❌ No banks configured. Use `/addbank Name|AccNo|IFSC|BankName|UPI|MinAmount` to add one.', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      let m = `💳 *Configured Banks (${freshData.banks.length}):*\n━━━━━━━━━━━━━━━━━━\n\n` + bankListText(freshData);
+      await bot.sendMessage(chatId, m, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/addbank')) {
+      const rawArg = text.replace(/^\/addbank\s*/i, '').trim();
+      if (!rawArg) {
+        await bot.sendMessage(chatId, `❌ *Usage:* \`/addbank Name|AccNo|IFSC|BankName|UPI|MinAmount\`\n\n*Example:*\n\`/addbank Rahul Kumar|1234567890|SBIN0001234|SBI|rahul@upi|500\``, { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const parts = rawArg.includes('|') ? rawArg.split('|').map(s => s.trim()) : rawArg.split(/\s+/);
+      if (parts.length < 3) {
+        await bot.sendMessage(chatId, '❌ At least Name, Account Number, and IFSC are required.\nFormat: `/addbank Name|AccNo|IFSC|BankName|UPI|MinAmount`', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const freshData = await loadData(true);
+      freshData.banks = freshData.banks || [];
+      const newBank = {
+        accountHolder: parts[0],
+        accountNo: parts[1],
+        ifsc: parts[2],
+        bankName: parts[3] || '',
+        upiId: parts[4] || '',
+        minAmount: parts[5] ? (parseFloat(parts[5]) || 0) : 0
+      };
+      freshData.banks.push(newBank);
+      if (freshData.activeIndex < 0) freshData.activeIndex = 0;
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `✅ *Bank #${freshData.banks.length} Added Successfully!*\n━━━━━━━━━━━━━━━━━━\n👤 *Holder:* ${newBank.accountHolder}\n🔢 *Account:* \`${newBank.accountNo}\`\n🏛 *IFSC:* \`${newBank.ifsc}\`${newBank.bankName ? `\n🏦 *Bank:* ${newBank.bankName}` : ''}${newBank.upiId ? `\n📱 *UPI:* \`${newBank.upiId}\`` : ''}${newBank.minAmount ? `\n💵 *Min Amount:* ₹${newBank.minAmount}` : ''}`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/removebank')) {
+      const arg = text.replace(/^\/removebank\s*/i, '').trim();
+      const idx = parseInt(arg, 10) - 1;
+      const freshData = await loadData(true);
+      freshData.banks = freshData.banks || [];
+      if (isNaN(idx) || idx < 0 || idx >= freshData.banks.length) {
+        await bot.sendMessage(chatId, `❌ Invalid bank index. Use \`/banks\` to see list numbers (1 to ${freshData.banks.length}).`, { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const removed = freshData.banks.splice(idx, 1)[0];
+      if (freshData.activeIndex === idx) {
+        freshData.activeIndex = freshData.banks.length > 0 ? 0 : -1;
+      } else if (freshData.activeIndex > idx) {
+        freshData.activeIndex--;
+      }
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `🗑 *Bank Removed:*\n${removed.accountHolder} | \`${removed.accountNo}\`\n\nRemaining banks: ${freshData.banks.length}`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/setbank')) {
+      const arg = text.replace(/^\/setbank\s*/i, '').trim();
+      const idx = parseInt(arg, 10) - 1;
+      const freshData = await loadData(true);
+      freshData.banks = freshData.banks || [];
+      if (isNaN(idx) || idx < 0 || idx >= freshData.banks.length) {
+        await bot.sendMessage(chatId, `❌ Invalid bank index. Use \`/banks\` to see list numbers (1 to ${freshData.banks.length}).`, { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      freshData.activeIndex = idx;
+      await saveData(freshData);
+      const b = freshData.banks[idx];
+      await bot.sendMessage(chatId, `✅ *Active Bank Set to #${idx + 1}:*\n👤 *Holder:* ${b.accountHolder}\n🔢 *Account:* \`${b.accountNo}\`\n🏛 *IFSC:* \`${b.ifsc}\``, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/setmin')) {
+      const parts = text.replace(/^\/setmin\s*/i, '').trim().split(/\s+/);
+      const idx = parseInt(parts[0], 10) - 1;
+      const amt = parseFloat(parts[1]);
+      const freshData = await loadData(true);
+      freshData.banks = freshData.banks || [];
+      if (isNaN(idx) || idx < 0 || idx >= freshData.banks.length || isNaN(amt)) {
+        await bot.sendMessage(chatId, '❌ Format: `/setmin <bank_number> <amount>`\nExample: `/setmin 1 500`', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      freshData.banks[idx].minAmount = amt;
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `✅ Minimum amount for Bank #${idx + 1} (${freshData.banks[idx].accountHolder}) set to ₹${amt}`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/add ') || text.startsWith('/deduct ')) {
+      const isAdd = text.startsWith('/add ');
+      const rawArgs = text.substring(isAdd ? 5 : 8).trim().split(/\s+/);
+      const amount = parseFloat(rawArgs[0]);
+      const targetUserId = rawArgs[1] || '';
+      if (isNaN(amount) || !targetUserId) {
+        await bot.sendMessage(chatId, `❌ *Format:* \`${isAdd ? '/add' : '/deduct'} <amount> <userId>\`\n*Example:* \`${isAdd ? '/add' : '/deduct'} 500 123456\``, { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const freshData = await loadData(true);
+      freshData.userOverrides = freshData.userOverrides || {};
+      freshData.userOverrides[targetUserId] = freshData.userOverrides[targetUserId] || {};
+      const currentDelta = freshData.userOverrides[targetUserId].addedBalance || 0;
+      const newDelta = isAdd ? (currentDelta + amount) : (currentDelta - amount);
+      freshData.userOverrides[targetUserId].addedBalance = newDelta;
+
+      const tracked = freshData.trackedUsers && freshData.trackedUsers[targetUserId];
+      const currentBal = tracked ? tracked.balance : 'N/A';
+      const updatedBal = currentBal !== 'N/A' ? parseFloat((parseFloat(currentBal) + newDelta).toFixed(2)) : 'N/A';
+
+      freshData.balanceHistory = freshData.balanceHistory || [];
+      freshData.balanceHistory.push({
+        type: isAdd ? 'add' : 'deduct',
+        userId: targetUserId,
+        amount: amount,
+        totalAdded: newDelta,
+        originalBalance: currentBal,
+        updatedBalance: updatedBal,
+        time: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+        phone: (tracked && tracked.phone) || ''
+      });
+
+      if (!freshData.userOverrides[targetUserId].quotaRecords) freshData.userOverrides[targetUserId].quotaRecords = [];
+      const nowDate = new Date();
+      const dd = String(nowDate.getDate()).padStart(2, '0');
+      const mm = String(nowDate.getMonth() + 1).padStart(2, '0');
+      const yyyy = nowDate.getFullYear();
+      const hh = String(nowDate.getHours()).padStart(2, '0');
+      const mi = String(nowDate.getMinutes()).padStart(2, '0');
+      const ss = String(nowDate.getSeconds()).padStart(2, '0');
+      const formattedTime = `${dd}/${mm}/${yyyy} ${hh}:${mi}:${ss}`;
+      const balAfterAdd = updatedBal !== 'N/A' ? String(updatedBal) : String(amount);
+      if (isAdd) {
+        freshData.userOverrides[targetUserId].quotaRecords.push({
+          amount: "+" + String(amount),
+          balance: balAfterAdd,
+          createTime: formattedTime,
+          sourceType: "Deposit From Admin",
+          sourceTypeGroup: "Admin"
+        });
+      }
+      await saveData(freshData);
+      const actionWord = isAdd ? 'Added' : 'Deducted';
+      await bot.sendMessage(chatId, `✅ *${actionWord} ₹${amount} for user ${targetUserId}*\n💰 *Net Balance Override:* ₹${newDelta}\n📊 *Calculated Balance:* ${updatedBal !== 'N/A' ? `₹${updatedBal}` : '(Will show on user login)'}`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/remove balance')) {
+      const targetId = text.replace(/^\/remove balance\s*/i, '').trim();
+      if (!targetId) {
+        await bot.sendMessage(chatId, '❌ Format: `/remove balance <userId>`\nOr use `/resetallbalance` to reset all users.', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const freshData = await loadData(true);
+      freshData.userOverrides = freshData.userOverrides || {};
+      if (freshData.userOverrides[targetId] && freshData.userOverrides[targetId].addedBalance !== undefined) {
+        delete freshData.userOverrides[targetId].addedBalance;
+        delete freshData.userOverrides[targetId].quotaRecords;
+        freshData.balanceHistory = freshData.balanceHistory || [];
+        freshData.balanceHistory.push({
+          type: 'remove',
+          userId: targetId,
+          amount: 0,
+          totalAdded: 0,
+          originalBalance: 'N/A',
+          updatedBalance: 'Real',
+          time: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+          phone: ''
+        });
+        await saveData(freshData);
+        await bot.sendMessage(chatId, `🗑 *Removed fake balance for user ${targetId}.*\nReal system balance restored.`, { parse_mode: 'Markdown' });
+      } else {
+        await bot.sendMessage(chatId, `ℹ️ User ${targetId} had no active fake balance.`);
+      }
+      return res.sendStatus(200);
+    }
+
+    if (text === '/resetallbalance') {
+      const freshData = await loadData(true);
+      freshData.userOverrides = freshData.userOverrides || {};
+      for (const uid of Object.keys(freshData.userOverrides)) {
+        if (freshData.userOverrides[uid]) {
+          delete freshData.userOverrides[uid].addedBalance;
+          delete freshData.userOverrides[uid].quotaRecords;
+        }
+      }
+      await saveData(freshData);
+      await bot.sendMessage(chatId, '🔄 *All user fake balance overrides have been RESET to real balances.*', { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/history' || text.startsWith('/history ')) {
+      const target = text.startsWith('/history ') ? text.substring(9).trim() : '';
+      const freshData = await loadData(true);
+      const list = freshData.balanceHistory || [];
+      const filtered = target ? list.filter(h => h.userId === target) : list;
+      if (filtered.length === 0) {
+        await bot.sendMessage(chatId, `📋 No balance history records found${target ? ` for user ${target}` : ''}.`);
+        return res.sendStatus(200);
+      }
+      let m = `📋 *Balance History (${filtered.length} entries):*\n━━━━━━━━━━━━━━━━━━\n\n`;
+      const recent = filtered.slice(-15);
+      for (const h of recent) {
+        const icon = h.type === 'add' ? '➕' : (h.type === 'deduct' ? '➖' : '🔄');
+        m += `${icon} *User:* \`${h.userId}\` | *Amt:* ₹${h.amount} | *Net:* ₹${h.totalAdded}\n   🕒 ${h.time}\n\n`;
+      }
+      if (m.length > 4000) m = m.substring(0, 4000) + '\n...(truncated)';
+      await bot.sendMessage(chatId, m, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/clearhistory') {
+      const freshData = await loadData(true);
+      freshData.balanceHistory = [];
+      await saveData(freshData);
+      await bot.sendMessage(chatId, '🗑 *Balance history log cleared.*', { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/orders') {
+      const freshData = await loadData(true);
+      const map = freshData.orderBankMap || {};
+      const uniqueOrders = Object.values(map).filter((v, i, a) => v && v.orderCode && a.findIndex(t => t.orderCode === v.orderCode) === i);
+      if (uniqueOrders.length === 0) {
+        await bot.sendMessage(chatId, '📋 No active order-to-bank bindings.');
+        return res.sendStatus(200);
+      }
+      let m = `📦 *Saved Order Bindings (${uniqueOrders.length}):*\n━━━━━━━━━━━━━━━━━━\n\n`;
+      for (const o of uniqueOrders.slice(0, 20)) {
+        m += `• *Order:* \`${o.orderCode}\`\n  User: \`${o.userId || 'N/A'}\` | Amount: ₹${o.amount || '0'}\n  Bound Bank: ${o.bank ? `${o.bank.accountHolder} (\`${o.bank.accountNo}\`)` : 'None'}\n\n`;
+      }
+      if (uniqueOrders.length > 20) m += `...and ${uniqueOrders.length - 20} more orders.`;
+      await bot.sendMessage(chatId, m, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/delorder ')) {
+      const code = text.substring(10).trim();
+      const freshData = await loadData(true);
+      freshData.orderBankMap = freshData.orderBankMap || {};
+      const entry = freshData.orderBankMap[code];
+      if (entry) {
+        delete freshData.orderBankMap[code];
+        if (entry.buyId) delete freshData.orderBankMap[entry.buyId];
+        await saveData(freshData);
+        await bot.sendMessage(chatId, `🗑 *Order binding for \`${code}\` deleted.*`, { parse_mode: 'Markdown' });
+      } else {
+        await bot.sendMessage(chatId, `❌ Order \`${code}\` not found in bindings.`, { parse_mode: 'Markdown' });
+      }
+      return res.sendStatus(200);
+    }
+
+    if (text === '/clearorders') {
+      const freshData = await loadData(true);
+      freshData.orderBankMap = {};
+      await saveData(freshData);
+      await bot.sendMessage(chatId, '🗑 *All order-to-bank bindings cleared.*', { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/setstatus ')) {
+      const parts = text.substring(11).trim().split(/\s+/);
+      const code = parts[0];
+      const stNum = parseInt(parts[1], 10);
+      const userId = parts[2] || 'All';
+      const statusLabels = { 1: "Processing", 2: "Processing", 3: "Completed", 4: "Close/Failed" };
+      if (!code || isNaN(stNum) || !statusLabels[stNum]) {
+        await bot.sendMessage(chatId, '❌ Format: `/setstatus <orderCode> <1|3|4> [userId]`\n\n• `1` = Processing\n• `3` = Completed\n• `4` = Close / Failed\n\nExample: `/setstatus UM3GfR 3`', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const freshData = await loadData(true);
+      freshData.orderStatusOverrides = freshData.orderStatusOverrides || {};
+      const entry = {
+        userId: userId,
+        orderCode: code,
+        status: stNum,
+        statusLabel: statusLabels[stNum],
+        updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      };
+      freshData.orderStatusOverrides[code] = entry;
+      if (userId && userId !== 'All') {
+        freshData.orderStatusOverrides[`${userId}:${code}`] = entry;
+      }
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `✅ *Status Override Set!*\n━━━━━━━━━━━━━━━━━━\n📦 *Order:* \`${code}\`\n👤 *User:* \`${userId}\`\n🎯 *New Status:* ${statusLabels[stNum]} (${stNum})`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/delstatus ')) {
+      const code = text.substring(11).trim();
+      const freshData = await loadData(true);
+      freshData.orderStatusOverrides = freshData.orderStatusOverrides || {};
+      if (code === 'all') {
+        freshData.orderStatusOverrides = {};
+        await saveData(freshData);
+        await bot.sendMessage(chatId, '🗑 *All order status overrides cleared.*', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      delete freshData.orderStatusOverrides[code];
+      for (const k of Object.keys(freshData.orderStatusOverrides)) {
+        if (k.endsWith(`:${code}`)) delete freshData.orderStatusOverrides[k];
+      }
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `🗑 *Status override for \`${code}\` deleted.*`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/statusoverrides') {
+      const freshData = await loadData(true);
+      const map = freshData.orderStatusOverrides || {};
+      const keys = Object.keys(map).filter(k => !k.includes(':'));
+      if (keys.length === 0) {
+        await bot.sendMessage(chatId, '📋 No active order status overrides.');
+        return res.sendStatus(200);
+      }
+      let m = `🎯 *Active Status Overrides (${keys.length}):*\n━━━━━━━━━━━━━━━━━━\n\n`;
+      for (const k of keys) {
+        const o = map[k];
+        m += `• *Order:* \`${o.orderCode}\` ➔ *${o.statusLabel}* (${o.status})\n  Target: \`${o.userId || 'All'}\` | ${o.updatedAt}\n\n`;
+      }
+      await bot.sendMessage(chatId, m, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/dummies') {
+      const freshData = await loadData(true);
+      const dummies = freshData.dummyOrders || [];
+      if (dummies.length === 0) {
+        await bot.sendMessage(chatId, '🎁 No active dummy orders. Use `/adddummy <amount> [percent] [min] [max]` to add one.', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      let m = `🎁 *Active Dummy Orders (${dummies.length}):*\n━━━━━━━━━━━━━━━━━━\n\n`;
+      for (const d of dummies) {
+        const p = d.percent || 3;
+        m += `• \`${d.code}\` — *₹${d.amount}* (+₹${d.income || (d.amount * p / 100).toFixed(2)}, ${p}%)\n  Range: ₹${d.minRange || 0} - ₹${d.maxRange || 'Max'} | ${d.createdAt}\n\n`;
+      }
+      await bot.sendMessage(chatId, m, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/adddummy')) {
+      const parts = text.replace(/^\/adddummy\s*/i, '').trim().split(/\s+/);
+      const amount = parseFloat(parts[0]);
+      if (isNaN(amount) || amount <= 0) {
+        await bot.sendMessage(chatId, '❌ Format: `/adddummy <amount> [percent] [minRange] [maxRange]`\nExample: `/adddummy 2000 3.5 1000 5000`', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const p = parts[1] ? (parseFloat(parts[1]) || 3) : 3;
+      const min = parts[2] ? parseFloat(parts[2]) : null;
+      const max = parts[3] ? parseFloat(parts[3]) : null;
+      const freshData = await loadData(true);
+      const incVal = parseFloat((amount * (p / 100)).toFixed(2));
+      const cd = generateDummyCode();
+      const numId = generateDummyId();
+      const dummy = {
+        id: cd,
+        payOrderId: cd,
+        orderId: cd,
+        buyId: cd,
+        code: cd,
+        orderCode: cd,
+        buyCode: cd,
+        remark: cd,
+        sn: cd,
+        numericId: numId,
+        amount: amount,
+        orderAmount: amount,
+        percent: p,
+        commissionRate: p,
+        income: incVal,
+        commission: incVal,
+        rebate: incVal,
+        reward: incVal,
+        profit: incVal,
+        incomeAmount: incVal,
+        commissionAmount: incVal,
+        rebateAmount: incVal,
+        rewardAmount: incVal,
+        rateAmount: incVal,
+        minRange: min,
+        maxRange: max,
+        createdAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      };
+      freshData.dummyOrders = freshData.dummyOrders || [];
+      freshData.dummyOrders.push(dummy);
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `🎁 *Dummy Order Created!*\n━━━━━━━━━━━━━━━━━━\n📦 *Code:* \`${cd}\`\n💵 *Amount:* ₹${amount}\n📈 *Income:* +₹${incVal} (${p}%)\n🎯 *Range:* ${min || 0} - ${max || 'Unlimited'}`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/deldummy')) {
+      const id = text.replace(/^\/deldummy\s*/i, '').trim();
+      if (!id) {
+        await bot.sendMessage(chatId, '❌ Format: `/deldummy <code|id>` or `/deldummy all`', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const freshData = await loadData(true);
+      freshData.dummyOrders = freshData.dummyOrders || [];
+      if (id === 'all') {
+        freshData.dummyOrders = [];
+        await saveData(freshData);
+        await bot.sendMessage(chatId, '🗑 *All dummy orders deleted.*', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const beforeLen = freshData.dummyOrders.length;
+      freshData.dummyOrders = freshData.dummyOrders.filter(d => String(d.id) !== id && String(d.code) !== id);
+      await saveData(freshData);
+      if (freshData.dummyOrders.length < beforeLen) {
+        await bot.sendMessage(chatId, `🗑 *Dummy order \`${id}\` deleted.*`, { parse_mode: 'Markdown' });
+      } else {
+        await bot.sendMessage(chatId, `❌ Dummy order \`${id}\` not found.`, { parse_mode: 'Markdown' });
+      }
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/suspend ')) {
+      const parts = text.substring(9).trim().split(/\s+/);
+      const targetPhone = parts[0];
+      const customMsg = parts.slice(1).join(' ') || 'Your account has been suspended.';
+      if (!targetPhone) {
+        await bot.sendMessage(chatId, '❌ Format: `/suspend <phone/userId> [reason]`\nExample: `/suspend 9876543210 Violation of rules`', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const freshData = await loadData(true);
+      freshData.suspendedUsers = freshData.suspendedUsers || {};
+      freshData.suspendedUsers[targetPhone] = {
+        phone: targetPhone,
+        message: customMsg,
+        updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      };
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `🚫 *User \`${targetPhone}\` Suspended!*\nReason: "${customMsg}"`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/unsuspend ')) {
+      const targetPhone = text.substring(11).trim();
+      const freshData = await loadData(true);
+      freshData.suspendedUsers = freshData.suspendedUsers || {};
+      if (freshData.suspendedUsers[targetPhone]) {
+        delete freshData.suspendedUsers[targetPhone];
+        await saveData(freshData);
+        await bot.sendMessage(chatId, `✅ *User \`${targetPhone}\` unsuspended successfully.*`, { parse_mode: 'Markdown' });
+      } else {
+        await bot.sendMessage(chatId, `ℹ️ User \`${targetPhone}\` was not suspended.`, { parse_mode: 'Markdown' });
+      }
+      return res.sendStatus(200);
+    }
+
+    if (text === '/suspended') {
+      const freshData = await loadData(true);
+      const list = Object.values(freshData.suspendedUsers || {});
+      if (list.length === 0) {
+        await bot.sendMessage(chatId, '📋 No suspended accounts.');
+        return res.sendStatus(200);
+      }
+      let m = `🚫 *Suspended Accounts (${list.length}):*\n━━━━━━━━━━━━━━━━━━\n\n`;
+      for (const u of list) {
+        m += `• \`${u.phone}\` — "${u.message}" (${u.updatedAt})\n\n`;
+      }
+      await bot.sendMessage(chatId, m, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text === '/idtrack') {
+      const freshData = await loadData(true);
+      const tracked = freshData.trackedUsers || {};
+      const ids = Object.keys(tracked);
+      if (ids.length === 0) {
+        await bot.sendMessage(chatId, '📋 No users tracked yet. Users will appear when they use the app.');
+        return res.sendStatus(200);
+      }
+      let m = `📋 *Tracked Users (${ids.length}):*\n━━━━━━━━━━━━━━━━━━\n\n`;
+      for (const uid of ids.slice(0, 20)) {
+        const u = tracked[uid];
+        const hasOverride = (freshData.userOverrides && freshData.userOverrides[uid]) ? ' ⚙️' : '';
+        m += `👤 *ID:* \`${uid}\`${hasOverride}\n   📱 Phone: \`${u.phone || 'N/A'}\` | Bal: ₹${u.balance || '0'}\n   🕐 Last: ${u.lastAction || 'Active'} @ ${u.lastSeen || 'N/A'}\n\n`;
+      }
+      if (ids.length > 20) m += `...and ${ids.length - 20} more users.`;
+      await bot.sendMessage(chatId, m, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/deltrack ')) {
+      const uid = text.substring(10).trim();
+      const freshData = await loadData(true);
+      freshData.trackedUsers = freshData.trackedUsers || {};
+      if (freshData.trackedUsers[uid]) {
+        delete freshData.trackedUsers[uid];
+        await saveData(freshData);
+        await bot.sendMessage(chatId, `🗑 *Tracked data for user \`${uid}\` deleted.*`, { parse_mode: 'Markdown' });
+      } else {
+        await bot.sendMessage(chatId, `❌ User \`${uid}\` not found in tracking.`, { parse_mode: 'Markdown' });
+      }
+      return res.sendStatus(200);
+    }
+
+    if (text === '/cleartracking') {
+      const freshData = await loadData(true);
+      freshData.trackedUsers = {};
+      await saveData(freshData);
+      await bot.sendMessage(chatId, '🗑 *All user tracking records cleared.*', { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/off log ')) {
+      const targetId = text.substring(9).trim();
+      const freshData = await loadData(true);
+      freshData.userOverrides = freshData.userOverrides || {};
+      freshData.userOverrides[targetId] = freshData.userOverrides[targetId] || {};
+      freshData.userOverrides[targetId].logOff = true;
+      for (const [tKey, uid] of Object.entries(tokenUserMap)) {
+        if (String(uid) === String(targetId)) logOffTokens.add(tKey);
+      }
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `🔇 *Logging turned OFF for user \`${targetId}\`.*`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/on log ')) {
+      const targetId = text.substring(8).trim();
+      const freshData = await loadData(true);
+      if (freshData.userOverrides && freshData.userOverrides[targetId]) {
+        delete freshData.userOverrides[targetId].logOff;
+        for (const [tKey, uid] of Object.entries(tokenUserMap)) {
+          if (String(uid) === String(targetId)) logOffTokens.delete(tKey);
+        }
+        await saveData(freshData);
+      }
+      await bot.sendMessage(chatId, `📡 *Logging turned ON for user \`${targetId}\`.*`, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/usdt')) {
+      const addr = text.replace(/^\/usdt\s*/i, '').trim();
+      const freshData = await loadData(true);
+      if (!addr) {
+        await bot.sendMessage(chatId, `₮ *Current USDT Address:* ${freshData.usdtAddress ? `\`${freshData.usdtAddress}\`` : 'None'}\n\nTo set: \`/usdt <TRC20_ADDRESS>\`\nTo disable: \`/usdt off\``, { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      if (addr.toLowerCase() === 'off') {
+        freshData.usdtAddress = '';
+        await saveData(freshData);
+        await bot.sendMessage(chatId, '❌ *USDT TRC20 address override turned OFF.*', { parse_mode: 'Markdown' });
+      } else if (addr.length >= 20) {
+        freshData.usdtAddress = addr;
+        await saveData(freshData);
+        await bot.sendMessage(chatId, `₮ *USDT TRC20 Address Set:*\n\`${addr}\``, { parse_mode: 'Markdown' });
+      } else {
+        await bot.sendMessage(chatId, '❌ Invalid USDT address (at least 20 characters required).', { parse_mode: 'Markdown' });
+      }
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/service')) {
+      const link = text.replace(/^\/service\s*/i, '').trim();
+      const freshData = await loadData(true);
+      if (!link) {
+        await bot.sendMessage(chatId, `🎧 *Current Support Link:* ${freshData.customServiceLink ? `\`${freshData.customServiceLink}\`` : 'Default'}\n\nTo set: \`/service https://t.me/your_handle\`\nTo disable: \`/service off\``, { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      if (link.toLowerCase() === 'off') {
+        freshData.customServiceLink = '';
+        await saveData(freshData);
+        await bot.sendMessage(chatId, '🔴 *Customer Service override turned OFF (Using real app links).*', { parse_mode: 'Markdown' });
+      } else {
+        let formattedUrl = link;
+        if (formattedUrl.startsWith('@')) formattedUrl = 'https://t.me/' + formattedUrl.substring(1);
+        else if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) formattedUrl = 'https://t.me/' + formattedUrl;
+        freshData.customServiceLink = formattedUrl;
+        await saveData(freshData);
+        await bot.sendMessage(chatId, `🎧 *Customer Service Link Updated:*\n\`${formattedUrl}\``, { parse_mode: 'Markdown' });
+      }
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/bot2')) {
+      const parts = text.replace(/^\/bot2\s*/i, '').trim().split(/\s+/);
+      const freshData = await loadData(true);
+      if (parts[0] === 'on') {
+        freshData.bot2Enabled = true;
+        BOT2_ENABLED = true;
+        await saveData(freshData);
+        await bot.sendMessage(chatId, '🟢 *Secondary Bot Notifications ON*', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      if (parts[0] === 'off') {
+        freshData.bot2Enabled = false;
+        BOT2_ENABLED = false;
+        await saveData(freshData);
+        await bot.sendMessage(chatId, '🔴 *Secondary Bot Notifications OFF*', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const token = parts[0];
+      const newChatId = parts[1];
+      if (!token || !newChatId) {
+        await bot.sendMessage(chatId, `🤖 *Secondary Bot Config:*\nToken: \`${freshData.bot2Token || 'None'}\`\nChat ID: \`${freshData.bot2ChatId || 'None'}\`\nStatus: ${freshData.bot2Enabled ? '🟢 ON' : '🔴 OFF'}\n\n*Usage:* \`/bot2 <token> <chatId>\`\n*Toggle:* \`/bot2 on\` / \`/bot2 off\``, { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      freshData.bot2Token = token;
+      freshData.bot2ChatId = newChatId;
+      freshData.bot2Enabled = true;
+      BOT2_TOKEN = token;
+      BOT2_CHAT_ID = newChatId;
+      BOT2_ENABLED = true;
+      try { bot2 = new TelegramBot(BOT2_TOKEN); } catch (e) { }
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `✅ *Secondary Bot Settings Saved!*\nToken: \`${token.substring(0, 10)}...\`\nChat ID: \`${newChatId}\``, { parse_mode: 'Markdown' });
+      return res.sendStatus(200);
+    }
+
+    if (text.startsWith('/setadmin')) {
+      const parts = text.replace(/^\/setadmin\s*/i, '').trim().split(/\s+/);
+      const targetStr = parts[0];
+      let targetChatId = targetStr === 'me' ? chatId : (parseInt(targetStr, 10) || targetStr);
+      if (!targetChatId) {
+        await bot.sendMessage(chatId, '❌ Format: `/setadmin <newChatId>`\nExample: `/setadmin 123456789`', { parse_mode: 'Markdown' });
+        return res.sendStatus(200);
+      }
+      const freshData = await loadData(true);
+      freshData.adminChatId = targetChatId;
+      await saveData(freshData);
+      await bot.sendMessage(chatId, `👑 *Admin Chat ID changed to:* \`${targetChatId}\``, { parse_mode: 'Markdown' });
+      if (String(targetChatId) !== String(chatId)) {
+        bot.sendMessage(targetChatId, `👑 You have been set as the Admin for WecoinPay Bot! Send /start to view controls.`).catch(() => { });
+      }
+      return res.sendStatus(200);
+    }
 
     if (text.startsWith('/useid')) {
       const freshData = await loadData(true);
@@ -1507,39 +2253,8 @@ app.post('/bot-webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // User Log, Balance, and Dummy orders moved to Web Dashboard
-    // Redirection already handled above.
-
-    // Migrated user/balance/history/tracking commands removed.
-
-    // Banking commands removed.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     if (text === '/help') {
-      await bot.sendMessage(chatId, 'Use /start to see all commands.');
+      await bot.sendMessage(chatId, 'Use /start to see all available commands.');
       return res.sendStatus(200);
     }
 
@@ -3765,1283 +4480,16 @@ app.all('/app/app/version/info/getLatestAppVersion', async (req, res) => {
   res.json({ "code": 1000, "data": { "id": 1, "createTime": "2025-01-01 00:00:00", "updateTime": "2025-01-01 00:00:00", "platform": "android", "appVersion": "1.0.0", "buildCode": 1, "updateType": "apk", "downloadUrl": "", "isForce": 0, "grayPercent": 0, "updateTitle": "", "updateContent": "", "fileSize": null, "fileMd5": "", "status": 0 }, "message": "success" });
 });
 
-// === YOUGOGIRL DASHBOARD (SECOND BOT MANAGEMENT) ===
-app.get('/yougogirl', async (req, res) => {
-  const data = await loadData(true);
-  const mainWebhookLink = `https://api.telegram.org/bot${data.botToken}/setWebhook?url=${encodeURIComponent(WEBHOOK_URL)}`;
-  const webhookLink = `https://api.telegram.org/bot${data.bot2Token}/setWebhook?url=${encodeURIComponent(WEBHOOK2_URL)}`;
-
-  const html = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WecoinPay Admin Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        :root { --bg: #0a0f1e; --card: #161e31; --accent: #38bdf8; --text: #f1f5f9; --glass: rgba(22, 30, 49, 0.7); }
-        body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; overflow-x: hidden; }
-        .glass { background: var(--glass); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
-        .card { background: var(--card); border-radius: 1.5rem; padding: 1.5rem; border: 1px solid rgba(255, 255, 255, 0.05); box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4); }
-        .gradient-text { background: linear-gradient(135deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .input-field { background: #0a0f1e; border: 1px solid #2d3748; border-radius: 0.75rem; padding: 0.75rem 1rem; width: 100%; color: white; transition: all 0.2s; font-size: 0.875rem; }
-        .input-field:focus { border-color: #38bdf8; outline: none; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2); }
-        .btn-primary { background: linear-gradient(135deg, #38bdf8, #818cf8); border-radius: 0.75rem; padding: 0.75rem 1.5rem; font-weight: 600; transition: all 0.2s; color: white; }
-        .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3); }
-        .tab-btn { padding: 0.85rem 1.25rem; border-radius: 1rem; font-weight: 500; transition: all 0.2s; cursor: pointer; display: flex; items-center: center; color: #94a3b8; border: 1px solid transparent; }
-        .tab-btn:hover { background: rgba(255,255,255,0.05); color: #f1f5f9; }
-        .tab-btn.active { background: rgba(56, 189, 248, 0.1); color: #38bdf8; border-color: rgba(56, 189, 248, 0.2); }
-        .tab-content { display: none; animation: fadeIn 0.3s ease-out; }
-        .tab-content.active { display: block; }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .badge { padding: 0.25rem 0.5rem; border-radius: 0.5rem; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #0a0f1e; }
-        ::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 10px; }
-    </style>
-</head>
-<body class="min-h-screen p-4 md:p-8">
-    <div class="max-w-7xl mx-auto">
-        <!-- Header -->
-        <header class="flex flex-col md:flex-row md:items-center justify-between mb-10 gap-6">
-            <div>
-                <h1 class="text-4xl font-black gradient-text tracking-tight">WECOINPAY PRO</h1>
-                <p class="text-slate-400 font-medium">Ultimate Proxy & System Command Center</p>
-            </div>
-            <div class="flex flex-wrap items-center gap-4">
-                <div class="glass px-5 py-3 rounded-2xl flex items-center gap-4">
-                    <div class="flex items-center gap-2">
-                        <span class="status-dot ${data.botEnabled ? 'bg-emerald-500 shadow-[0_0_10px_#10b981]' : 'bg-rose-500'}"></span>
-                        <span class="text-xs font-bold uppercase tracking-wider">${data.botEnabled ? 'System Live' : 'System Offline'}</span>
-                    </div>
-                    <div class="w-px h-6 bg-slate-700"></div>
-                    <div class="flex items-center gap-2">
-                        <span class="status-dot ${data.logDebugRequests ? 'bg-amber-500 shadow-[0_0_10px_#f59e0b]' : 'bg-slate-600'}"></span>
-                        <span class="text-xs font-bold uppercase tracking-wider">${data.logDebugRequests ? 'Debug ON' : 'Debug OFF'}</span>
-                    </div>
-                    <div class="w-px h-6 bg-slate-700"></div>
-                    <div class="flex items-center gap-2">
-                        <span class="status-dot ${redis ? 'bg-emerald-500 shadow-[0_0_10px_#10b981]' : 'bg-rose-500 shadow-[0_0_10px_#f43f5e]'}"></span>
-                        <span class="text-xs font-bold uppercase tracking-wider">${redis ? 'Redis Live' : 'Redis Off'}</span>
-                    </div>
-                </div>
-                <div class="glass px-5 py-3 rounded-2xl text-xs font-bold uppercase tracking-wider text-sky-400">
-                    <i class="fa-solid fa-users mr-2"></i> ${Object.keys(data.trackedUsers || {}).length} Users
-                </div>
-            </div>
-        </header>
-
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            <!-- Navigation Sidebar -->
-            <aside class="lg:col-span-3 space-y-2">
-                <div onclick="showTab('overview')" class="tab-btn active" id="btn-overview">
-                    <i class="fa-solid fa-house-chimney w-6"></i> Overview
-                </div>
-                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] px-4 mt-6 mb-2">User Management</div>
-                <div onclick="showTab('balance')" class="tab-btn" id="btn-balance">
-                    <i class="fa-solid fa-wallet w-6"></i> Balance
-                </div>
-                <div onclick="showTab('tracking')" class="tab-btn" id="btn-tracking">
-                    <i class="fa-solid fa-radar w-6"></i> User Tracking
-                </div>
-                <div onclick="showTab('suspend')" class="tab-btn" id="btn-suspend">
-                    <i class="fa-solid fa-user-slash w-6 text-rose-400"></i> Suspend Users
-                </div>
-                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] px-4 mt-6 mb-2">Banking & Orders</div>
-                <div onclick="showTab('banks')" class="tab-btn" id="btn-banks">
-                    <i class="fa-solid fa-building-columns w-6"></i> Banks
-                </div>
-                <div onclick="showTab('orders')" class="tab-btn" id="btn-orders">
-                    <i class="fa-solid fa-file-invoice-dollar w-6"></i> Saved Orders
-                </div>
-                <div onclick="showTab('dummies')" class="tab-btn" id="btn-dummies">
-                    <i class="fa-solid fa-box-open w-6"></i> Dummy Orders
-                </div>
-                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] px-4 mt-6 mb-2">Settings</div>
-                <div onclick="showTab('system')" class="tab-btn" id="btn-system">
-                    <i class="fa-solid fa-sliders w-6"></i> System Config
-                </div>
-                <div onclick="showTab('mainbot')" class="tab-btn" id="btn-mainbot">
-                    <i class="fa-solid fa-gear w-6"></i> Main Bot
-                </div>
-                <div onclick="showTab('bot2')" class="tab-btn" id="btn-bot2">
-                    <i class="fa-solid fa-robot w-6"></i> Second Bot
-                </div>
-                <div onclick="showTab('history')" class="tab-btn" id="btn-history">
-                    <i class="fa-solid fa-clock-rotate-left w-6"></i> History
-                </div>
-            </aside>
-
-            <!-- Content Area -->
-            <main class="lg:col-span-9 space-y-8">
-                
-                <!-- Tab: Overview -->
-                <section id="tab-overview" class="tab-content active space-y-6">
-                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <div class="card group cursor-pointer" onclick="toggleProxy('botEnabled')">
-                            <div class="text-slate-500 text-[10px] font-bold uppercase mb-2">Proxy Engine</div>
-                            <div class="text-xl font-black ${data.botEnabled ? 'text-emerald-400' : 'text-rose-500'}">${data.botEnabled ? 'ACTIVE' : 'OFFLINE'}</div>
-                        </div>
-                        <div class="card group cursor-pointer" onclick="toggleProxy('autoRotate')">
-                            <div class="text-slate-500 text-[10px] font-bold uppercase mb-2">Bank Rotation</div>
-                            <div class="text-xl font-black ${data.autoRotate ? 'text-emerald-400' : 'text-rose-500'}">${data.autoRotate ? 'ON' : 'OFF'}</div>
-                        </div>
-                        <div class="card group cursor-pointer" onclick="toggleProxy('logRequests')">
-                            <div class="text-slate-500 text-[10px] font-bold uppercase mb-2">Traffic Log</div>
-                            <div class="text-xl font-black ${data.logRequests ? 'text-emerald-400' : 'text-rose-500'}">${data.logRequests ? 'ON' : 'OFF'}</div>
-                        </div>
-                        <div class="card group cursor-pointer" onclick="toggleDebug()">
-                            <div class="text-slate-500 text-[10px] font-bold uppercase mb-2">Debug Mode</div>
-                            <div class="text-xl font-black ${data.logDebugRequests ? 'text-amber-400' : 'text-slate-500'}">${data.logDebugRequests ? 'ACTIVE' : 'OFF'}</div>
-                        </div>
-                    </div>
-
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div class="card">
-                            <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
-                                <i class="fa-solid fa-shield-halved text-sky-400"></i> Active Bank
-                            </h3>
-                            ${(() => {
-      const active = data.banks[data.activeIndex] || data.banks[0];
-      if (!active) return '<p class="text-slate-500 italic text-sm">No banks configured.</p>';
-      return '<div class="space-y-2 text-sm">' +
-        '<div class="flex justify-between"><span class="text-slate-500">Holder:</span> <span class="font-mono">' + active.accountHolder + '</span></div>' +
-        '<div class="flex justify-between"><span class="text-slate-500">Account:</span> <span class="font-mono">' + active.accountNo + '</span></div>' +
-        '<div class="flex justify-between"><span class="text-slate-500">IFSC:</span> <span class="font-mono">' + active.ifsc + '</span></div>' +
-        '<div class="flex justify-between"><span class="text-slate-500">UPI:</span> <span class="text-sky-400">' + (active.upiId || 'N/A') + '</span></div>' +
-        '</div>';
-    })()}
-                        </div>
-                        <div class="card">
-                            <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
-                                <i class="fa-solid fa-link text-indigo-400"></i> Quick Links
-                            </h3>
-                            <div class="space-y-3">
-                                <a href="/yougogirl" class="block p-3 glass rounded-xl hover:bg-white/5 transition-all text-sm font-medium">
-                                    <i class="fa-solid fa-refresh mr-2 text-emerald-400"></i> Refresh Dashboard
-                                </a>
-                                <a href="${webhookLink}" target="_blank" class="block p-3 glass rounded-xl hover:bg-white/5 transition-all text-sm font-medium">
-                                    <i class="fa-solid fa-bolt mr-2 text-amber-400"></i> Re-activate Webhook
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Tab: Balance -->
-                <section id="tab-balance" class="tab-content space-y-6">
-                    <div class="card">
-                        <h3 class="text-xl font-bold mb-6">Balance Adjustment</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">User ID</label>
-                                <input type="text" id="bal-userId" class="input-field" placeholder="User ID">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Amount (₹)</label>
-                                <input type="number" id="bal-amount" class="input-field" placeholder="0.00">
-                            </div>
-                            <div class="flex items-end gap-2">
-                                <button onclick="updateBalance('add')" class="flex-1 bg-emerald-500 text-white font-bold py-2.5 rounded-xl hover:opacity-90">Add</button>
-                                <button onclick="updateBalance('deduct')" class="flex-1 bg-rose-500 text-white font-bold py-2.5 rounded-xl hover:opacity-90">Deduct</button>
-                            </div>
-                        </div>
-                        <div class="mt-6 p-4 glass rounded-2xl flex items-center justify-between">
-                            <div class="text-sm text-slate-400">
-                                <i class="fa-solid fa-circle-info mr-2"></i> Reset will remove all fake balance and show the real system balance.
-                            </div>
-                            <button onclick="updateBalance('remove', 'all')" class="text-sm font-bold text-sky-400 hover:underline">Reset All to Real Balance</button>
-                        </div>
-                    </div>
-
-                    <!-- Active Modified User Balances Card -->
-                    <div class="card overflow-hidden">
-                        <div class="flex items-center justify-between mb-6">
-                            <div>
-                                <h3 class="text-xl font-bold">Active Modified User Balances</h3>
-                                <p class="text-xs text-slate-400">List of users who currently have fake balance added or deducted</p>
-                            </div>
-                            <button onclick="updateBalance('remove', 'all')" class="text-xs font-bold text-rose-500 hover:underline">Clear All Modified Balances</button>
-                        </div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-left text-sm">
-                                <thead class="text-slate-500 border-b border-slate-800">
-                                    <tr>
-                                        <th class="pb-4">User ID</th>
-                                        <th class="pb-4">Phone</th>
-                                        <th class="pb-4">Added (Fake) Balance</th>
-                                        <th class="pb-4">Real System Balance</th>
-                                        <th class="pb-4 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-slate-800">
-                                    ${(() => {
-      const modifiedUsers = Object.entries(data.userOverrides || {}).filter(([uid, ovr]) => ovr && ovr.addedBalance !== undefined && ovr.addedBalance !== 0);
-      if (modifiedUsers.length === 0) {
-        return '<tr><td colspan="5" class="py-8 text-center text-slate-600 italic">No users currently have modified balance.</td></tr>';
-      }
-      return modifiedUsers.map(([uid, ovr]) => {
-        const tracked = data.trackedUsers && data.trackedUsers[uid];
-        const phone = (tracked && tracked.phone) || userPhoneMap[uid] || 'N/A';
-        const realBal = (tracked && tracked.balance !== undefined) ? '₹' + tracked.balance : 'N/A';
-        const added = ovr.addedBalance;
-        const addedText = (added > 0 ? '+₹' : '-₹') + Math.abs(added).toFixed(2);
-        const addedClass = added > 0 ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10';
-        return '<tr>' +
-          '<td class="py-4 font-mono font-bold text-sky-400">' + uid + '</td>' +
-          '<td class="py-4 text-slate-400 text-xs">' + phone + '</td>' +
-          '<td class="py-4"><span class="px-2.5 py-1 rounded-lg text-xs font-bold ' + addedClass + '">' + addedText + '</span></td>' +
-          '<td class="py-4 font-mono text-slate-400 text-xs">' + realBal + '</td>' +
-          '<td class="py-4 text-right"><button onclick="updateBalance(\'remove\', \'' + uid + '\')" class="bg-rose-500/10 text-rose-500 px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-rose-500/20 transition-all"><i class="fa-solid fa-trash-can mr-1"></i> Clear Balance</button></td>' +
-          '</tr>';
-      }).join('');
-    })()}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Tab: Tracking -->
-                <section id="tab-tracking" class="tab-content space-y-6">
-                    <div class="card overflow-hidden">
-                        <div class="flex items-center justify-between mb-6">
-                            <h3 class="text-xl font-bold">Real-time User Tracking</h3>
-                            <div class="flex items-center gap-4">
-                                <button onclick="clearAllTracking()" class="text-xs font-bold text-rose-500 hover:underline">Clear All Data</button>
-                                <div class="text-xs text-slate-500">Updates automatically on reload</div>
-                            </div>
-                        </div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-left text-sm">
-                                <thead class="text-slate-500 border-b border-slate-800">
-                                    <tr>
-                                        <th class="pb-4">User Details</th>
-                                        <th class="pb-4">Balance Status</th>
-                                        <th class="pb-4 text-center">Logging</th>
-                                        <th class="pb-4">Activity</th>
-                                        <th class="pb-4 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-slate-800">
-                                    ${Object.entries(data.trackedUsers || {}).map(([uid, u]) => {
-      const isOff = data.userOverrides[uid] && data.userOverrides[uid].logOff;
-      const added = (data.userOverrides[uid] && data.userOverrides[uid].addedBalance) || 0;
-      return '<tr>' +
-        '<td class="py-4">' +
-        '<div class="font-mono font-bold text-sky-400">' + uid + '</div>' +
-        '<div class="text-xs text-slate-500">' + (u.phone || 'No Phone') + '</div>' +
-        '</td>' +
-        '<td class="py-4">' +
-        '<div class="font-bold">₹' + (u.balance || '0') + '</div>' +
-        (added !== 0 ? '<div class="text-[10px] ' + (added > 0 ? 'text-emerald-400' : 'text-rose-500') + '">Fake: ' + (added > 0 ? '+' : '') + added + '</div>' : '') +
-        '</td>' +
-        '<td class="py-4">' +
-        '<button onclick="toggleUserLog(\'' + uid + '\')" class="badge ' + (isOff ? 'bg-rose-500/10 text-rose-500' : 'bg-emerald-500/10 text-emerald-500') + '">' +
-        (isOff ? 'OFF' : 'ON') +
-        '</button>' +
-        '</td>' +
-        '<td class="py-4">' +
-        '<div class="text-[10px] font-bold text-slate-500">' + (u.orderCount || 0) + ' ORDERS</div>' +
-        '<div class="text-[9px] text-slate-600">' + (u.lastSeen || 'N/A') + '</div>' +
-        '</td>' +
-        '<td class="py-4 text-right">' +
-        '<button onclick="deleteTracking(\'' + uid + '\')" class="text-rose-500 hover:text-rose-400 transition-colors">' +
-        '<i class="fa-solid fa-trash-can"></i>' +
-        '</button>' +
-        '</td>' +
-        '</tr>';
-    }).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Tab: Suspend Users -->
-                <section id="tab-suspend" class="tab-content space-y-6">
-                    <!-- Suspend User Form Card -->
-                    <div class="card border-rose-500/20 bg-rose-500/5">
-                        <h3 class="text-xl font-bold mb-4 flex items-center gap-2">
-                            <i class="fa-solid fa-user-slash text-rose-500"></i> Account Suspension Manager
-                        </h3>
-                        <p class="text-xs text-slate-400 mb-6">Block specific phone numbers or User IDs from logging into the app and set custom error messages.</p>
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Phone Number / User ID</label>
-                                <input type="text" id="suspend-phone" class="input-field font-mono text-xs" placeholder="e.g. 6206785398 or User ID">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Custom Suspend Message</label>
-                                <input type="text" id="suspend-msg" class="input-field text-xs" placeholder="e.g. Id is suspended. Contact support.">
-                            </div>
-                        </div>
-
-                        <button onclick="updateSuspendRule()" class="py-3 px-4 rounded-xl font-bold bg-rose-500 hover:bg-rose-600 text-white shadow-lg shadow-rose-500/20 transition-all w-full flex items-center justify-center gap-2">
-                            <i class="fa-solid fa-ban"></i> Save & Suspend Account
-                        </button>
-                    </div>
-
-                    <!-- Active Suspended Accounts Table -->
-                    <div class="card overflow-hidden">
-                        <div class="flex items-center justify-between mb-6">
-                            <h3 class="text-lg font-bold flex items-center gap-2">
-                                <i class="fa-solid fa-shield-cat text-rose-500"></i> Active Suspended Accounts
-                            </h3>
-                            <button onclick="removeSuspendRule('all')" class="text-xs font-bold text-rose-500 hover:underline">Clear All Suspensions</button>
-                        </div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-left text-sm">
-                                <thead class="text-slate-500 border-b border-slate-800">
-                                    <tr>
-                                        <th class="pb-4">Phone / User ID</th>
-                                        <th class="pb-4">Custom Login Message</th>
-                                        <th class="pb-4">Suspended At</th>
-                                        <th class="pb-4 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-slate-800">
-                                    ${Object.entries(data.suspendedUsers || {}).map(([ph, rule]) => {
-      return '<tr>' +
-        '<td class="py-4 font-mono text-rose-400 font-bold">' + (rule.phone || ph) + '</td>' +
-        '<td class="py-4 text-xs font-semibold text-amber-300 italic">"' + (rule.message || 'Account suspended') + '"</td>' +
-        '<td class="py-4 text-[10px] text-slate-500">' + (rule.updatedAt || 'N/A') + '</td>' +
-        '<td class="py-4 text-right">' +
-        '<button onclick="removeSuspendRule(\'' + (rule.phone || ph) + '\')" class="text-emerald-400 hover:underline text-xs font-bold">Unsuspend</button>' +
-        '</td>' +
-        '</tr>';
-    }).join('')}
-                                    ${Object.keys(data.suspendedUsers || {}).length === 0 ? '<tr><td colspan="4" class="py-8 text-center text-slate-600 italic">No accounts are currently suspended.</td></tr>' : ''}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Tab: Banks -->
-                <section id="tab-banks" class="tab-content space-y-6">
-                    <div class="card">
-                        <h3 class="text-xl font-bold mb-6">Add New Bank</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                            <input type="text" id="bank-holder" class="input-field" placeholder="Account Holder Name">
-                            <input type="text" id="bank-accNo" class="input-field" placeholder="Account Number">
-                            <input type="text" id="bank-ifsc" class="input-field" placeholder="IFSC Code">
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <input type="text" id="bank-name" class="input-field" placeholder="Bank Name (Optional)">
-                            <input type="text" id="bank-upi" class="input-field" placeholder="UPI ID (Optional)">
-                        </div>
-                        <button onclick="addBank()" class="btn-primary w-full mt-6">Add Bank to System</button>
-                    </div>
-
-                    <div class="card">
-                        <h3 class="text-lg font-bold mb-4">System Banks</h3>
-                        <div class="grid grid-cols-1 gap-4">
-                            ${(data.banks || []).map((b, i) =>
-      '<div class="p-4 glass rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 ' + (data.activeIndex === i ? 'border-sky-500/50 bg-sky-500/5' : '') + '">' +
-      '<div>' +
-      '<div class="flex items-center gap-2 mb-1">' +
-      '<span class="text-xs font-black text-slate-500">#' + (i + 1) + '</span>' +
-      '<span class="font-bold">' + b.accountHolder + '</span>' +
-      (data.activeIndex === i ? '<span class="badge bg-sky-500 text-white text-[8px]">Active</span>' : '') +
-      '</div>' +
-      '<div class="text-xs text-slate-400 font-mono">' + b.accountNo + ' | ' + b.ifsc + '</div>' +
-      (b.upiId ? '<div class="text-[10px] text-sky-400 mt-1">' + b.upiId + '</div>' : '') +
-      '</div>' +
-      '<div class="flex flex-wrap items-center gap-2">' +
-      '<div class="flex items-center glass rounded-lg px-2 py-1">' +
-      '<span class="text-[10px] text-slate-500 mr-2">Min: ₹</span>' +
-      '<input type="number" value="' + (b.minAmount || 0) + '" onchange="setMin(' + i + ', this.value)" class="bg-transparent border-none text-xs w-16 focus:outline-none">' +
-      '</div>' +
-      '<button onclick="setActiveBank(' + i + ')" class="text-xs font-bold text-sky-400 hover:underline">Set Active</button>' +
-      '<button onclick="removeBank(' + i + ')" class="text-xs font-bold text-rose-500 hover:underline">Remove</button>' +
-      '</div>' +
-      '</div>'
-    ).join('')}
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Tab: Orders -->
-                <section id="tab-orders" class="tab-content space-y-6">
-                    <div class="card overflow-hidden">
-                        <div class="flex items-center justify-between mb-6">
-                            <h3 class="text-xl font-bold">Saved Order-Bank Bindings</h3>
-                            <button onclick="clearAllOrders()" class="text-xs font-bold text-rose-500 hover:underline">Clear All Bindings</button>
-                        </div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-left text-sm">
-                                <thead class="text-slate-500 border-b border-slate-800">
-                                    <tr>
-                                        <th class="pb-4">Order Code</th>
-                                        <th class="pb-4">User</th>
-                                        <th class="pb-4">Amount</th>
-                                        <th class="pb-4">Bound Bank</th>
-                                        <th class="pb-4 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-slate-800">
-                                    ${Object.values(data.orderBankMap || {}).filter((v, i, a) => v && v.orderCode && a.findIndex(t => t.orderCode === v.orderCode) === i).map(o =>
-      '<tr>' +
-      '<td class="py-4 font-mono text-sky-400 text-xs">' + o.orderCode + '</td>' +
-      '<td class="py-4 text-xs">' + (o.userId || 'N/A') + '</td>' +
-      '<td class="py-4 font-bold">₹' + (o.amount || '0') + '</td>' +
-      '<td class="py-4 text-xs text-slate-400">' +
-      (o.bank ? o.bank.accountHolder + '<br><span class="text-[10px]">' + o.bank.accountNo + '</span>' : 'N/A') +
-      '</td>' +
-      '<td class="py-4 text-right">' +
-      '<button onclick="deleteOrder(\'' + o.orderCode + '\')" class="text-rose-500 hover:underline">Delete</button>' +
-      '</td>' +
-      '</tr>'
-    ).join('')}
-                                    ${Object.keys(data.orderBankMap || {}).length === 0 ? '<tr><td colspan="5" class="py-8 text-center text-slate-600 italic">No saved order bindings.</td></tr>' : ''}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Tab: Dummies -->
-                <section id="tab-dummies" class="tab-content space-y-6">
-                    <div class="card">
-                        <h3 class="text-xl font-bold mb-6">Generate Dummy Order</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Base Amount (₹)</label>
-                                <input type="number" id="dummy-amount" class="input-field" placeholder="e.g. 2000">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Income Rate (%)</label>
-                                <input type="number" id="dummy-percent" step="0.1" class="input-field" placeholder="Default 3%">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Min Range (Optional)</label>
-                                <input type="number" id="dummy-min" class="input-field" placeholder="Auto-calculated">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Max Range (Optional)</label>
-                                <input type="number" id="dummy-max" class="input-field" placeholder="Auto-calculated">
-                            </div>
-                        </div>
-                        <button onclick="addDummy()" class="btn-primary w-full mt-6">Create & Broadcast Dummy Order</button>
-                    </div>
-
-                    <div class="card overflow-hidden">
-                        <div class="flex items-center justify-between mb-6">
-                            <h3 class="text-lg font-bold">Active Dummies</h3>
-                            <button onclick="deleteDummy('all')" class="text-xs font-bold text-rose-500 hover:underline">Clear All</button>
-                        </div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-left text-sm">
-                                <thead class="text-slate-500 border-b border-slate-800">
-                                    <tr>
-                                        <th class="pb-4">Order Code</th>
-                                        <th class="pb-4">Amount</th>
-                                        <th class="pb-4">Income / Rate</th>
-                                        <th class="pb-4">Target Range</th>
-                                        <th class="pb-4">Created At</th>
-                                        <th class="pb-4 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-slate-800">
-                                    ${(data.dummyOrders || []).map(d => {
-      const p = parseFloat(d.percent) || data.defaultIncomePercent || 3;
-      const inc = parseFloat(((parseFloat(d.amount) || 0) * (p / 100)).toFixed(2));
-      return '<tr>' +
-        '<td class="py-4 font-mono text-sky-400">' + d.code + '</td>' +
-        '<td class="py-4 font-bold text-emerald-400">₹' + d.amount + '</td>' +
-        '<td class="py-4 text-xs font-semibold text-emerald-300">+₹' + inc + ' (' + p + '%)</td>' +
-        '<td class="py-4 text-xs text-slate-400">' + (d.minRange || 'N/A') + ' - ' + (d.maxRange || 'N/A') + '</td>' +
-        '<td class="py-4 text-[10px] text-slate-500">' + (d.createdAt || 'N/A') + '</td>' +
-        '<td class="py-4 text-right">' +
-        '<button onclick="deleteDummy(\'' + d.id + '\')" class="text-rose-500 hover:underline">Delete</button>' +
-        '</td>' +
-        '</tr>';
-    }).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Tab: System -->
-                <section id="tab-system" class="tab-content space-y-6">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div class="card">
-                            <h3 class="text-xl font-bold mb-6 flex items-center gap-2">
-                                <i class="fa-solid fa-coins text-amber-400"></i> USDT Configuration
-                            </h3>
-                            <div class="space-y-4">
-                                <div>
-                                    <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">USDT TRC20 Address</label>
-                                    <input type="text" id="sys-usdt" value="${data.usdtAddress || ''}" class="input-field font-mono text-xs" placeholder="Enter TRC20 address">
-                                </div>
-                                <div class="text-[10px] text-slate-500 italic">Setting this will override the system's default USDT address for all users.</div>
-                                <button onclick="updateUsdt()" class="btn-primary w-full">Update USDT Address</button>
-                            </div>
-                        </div>
-
-                        <div class="card">
-                            <h3 class="text-xl font-bold mb-6 flex items-center gap-2">
-                                <i class="fa-solid fa-headset text-indigo-400"></i> Service Link
-                            </h3>
-                            <div class="space-y-4">
-                                <div>
-                                    <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Custom Support URL</label>
-                                    <input type="text" id="sys-service" value="${data.customServiceLink || ''}" class="input-field text-xs" placeholder="e.g. @support_handle or https://...">
-                                </div>
-                                <div class="text-[10px] text-slate-500 italic">Redirects all "Customer Service" clicks in the app to this link.</div>
-                                <button onclick="updateService()" class="btn-primary w-full">Update Support Link</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="card bg-amber-500/5 border-amber-500/20">
-                        <h3 class="text-lg font-bold text-amber-500 mb-2 flex items-center gap-2">
-                            <i class="fa-solid fa-triangle-exclamation"></i> Advanced Debug Control
-                        </h3>
-                        <p class="text-sm text-slate-400 mb-4">Debug mode will send full HTTP request/response payloads to the Telegram admin bot. Use only for troubleshooting.</p>
-                        <button onclick="toggleDebug()" class="px-6 py-2.5 rounded-xl font-bold ${data.logDebugRequests ? 'bg-amber-500 text-white' : 'bg-slate-800 text-slate-400'} transition-all">
-                            ${data.logDebugRequests ? 'Deactivate Debug Mode' : 'Activate Debug Mode'}
-                        </button>
-                    </div>
-                </section>
-
-                <!-- Tab: Main Bot -->
-                <section id="tab-mainbot" class="tab-content space-y-6">
-                    <div class="card">
-                        <h3 class="text-xl font-bold mb-6 flex items-center gap-2">
-                            <i class="fa-solid fa-gear text-sky-400"></i> Main Bot Configuration
-                        </h3>
-                        <div class="space-y-6">
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Main Bot Token</label>
-                                <input type="text" id="mainbot-token" value="${data.botToken || ''}" class="input-field font-mono text-xs" placeholder="Enter Main Bot Token">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Admin Chat ID</label>
-                                <input type="text" id="mainbot-chatId" value="${data.adminChatId || ''}" class="input-field font-mono text-xs" placeholder="Enter Admin Chat ID">
-                            </div>
-                            <div class="p-4 bg-sky-500/10 rounded-2xl border border-sky-500/20">
-                                <div class="flex gap-3">
-                                    <i class="fa-solid fa-circle-info text-sky-400 mt-1"></i>
-                                    <div class="text-xs text-sky-200/70 leading-relaxed">
-                                        Main Bot handle karta hai aapke saare administrative tasks, OTP bypass overrides, aur real-time user activity alerts. Token change karne par bot automatically restart ho jayega.
-                                    </div>
-                                </div>
-                            </div>
-                            <button onclick="updateMainBot()" class="btn-primary w-full">Save Main Bot Settings</button>
-                        </div>
-                    </div>
-
-                    <div class="card border-emerald-500/20 bg-emerald-500/5">
-                        <div class="text-center py-4">
-                            <h4 class="text-emerald-400 font-bold mb-2">Webhook Status</h4>
-                            <p class="text-xs text-slate-500 mb-6">Make sure the main webhook is registered with Telegram to receive bot updates.</p>
-                            <a href="${mainWebhookLink}" target="_blank" class="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-8 py-3 rounded-2xl font-black transition-all shadow-lg shadow-emerald-500/20">
-                                <i class="fa-solid fa-link"></i> Activate Main Webhook
-                            </a>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Tab: Bot2 -->
-                <section id="tab-bot2" class="tab-content space-y-6">
-                    <div class="card">
-                        <h3 class="text-xl font-bold mb-6 flex items-center gap-2">
-                            <i class="fa-solid fa-robot text-sky-400"></i> Secondary Bot Config
-                        </h3>
-                        <div class="space-y-6">
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Bot Token</label>
-                                <input type="text" id="bot2-token" value="${data.bot2Token || ''}" class="input-field font-mono text-xs" placeholder="Telegram Bot Token">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Admin Chat ID</label>
-                                <input type="text" id="bot2-chatId" value="${data.bot2ChatId || ''}" class="input-field font-mono text-xs" placeholder="Admin Chat ID">
-                            </div>
-                            <div class="flex items-center justify-between p-4 glass rounded-2xl">
-                                <div class="flex items-center gap-3">
-                                    <div class="w-10 h-10 rounded-full bg-sky-500/10 flex items-center justify-center text-sky-500">
-                                        <i class="fa-solid fa-bell"></i>
-                                    </div>
-                                    <div>
-                                        <span class="block font-bold text-sm">Notifications</span>
-                                        <span class="text-[10px] text-slate-500 uppercase font-black">${data.bot2Enabled ? 'ACTIVE' : 'DISABLED'}</span>
-                                    </div>
-                                </div>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" id="bot2-enabled" class="sr-only peer" ${data.bot2Enabled ? 'checked' : ''}>
-                                    <div class="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
-                                </label>
-                            </div>
-                            <button onclick="updateBot2()" class="btn-primary w-full">Save Secondary Bot Settings</button>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Tab: History -->
-                <section id="tab-history" class="tab-content space-y-6">
-                    <!-- History Status Override Manager Card -->
-                    <div class="card border-sky-500/20 bg-sky-500/5">
-                        <h3 class="text-xl font-bold mb-4 flex items-center gap-2">
-                            <i class="fa-solid fa-clock-rotate-left text-sky-400"></i> History Status Manager
-                        </h3>
-                        <p class="text-xs text-slate-400 mb-6">Manually override deposit history order status (Completed, Close, Processing) for any user or order code.</p>
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">User ID (Optional)</label>
-                                <input type="text" id="history-user-id" class="input-field font-mono text-xs" placeholder="e.g. 241024 or Leave Blank for All">
-                            </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 uppercase mb-2 block">Order Code / Remark / Buy ID</label>
-                                <input type="text" id="history-order-code" class="input-field font-mono text-xs" placeholder="e.g. UM3GfR, LwnWX1, 5732010">
-                            </div>
-                        </div>
-
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <button onclick="updateHistoryStatus(3)" class="py-3 px-4 rounded-xl font-bold bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2">
-                                <i class="fa-solid fa-circle-check"></i> Set Completed (Status 3)
-                            </button>
-                            <button onclick="updateHistoryStatus(4)" class="py-3 px-4 rounded-xl font-bold bg-rose-500 hover:bg-rose-600 text-white shadow-lg shadow-rose-500/20 transition-all flex items-center justify-center gap-2">
-                                <i class="fa-solid fa-circle-xmark"></i> Set Close / Failed (Status 4)
-                            </button>
-                            <button onclick="updateHistoryStatus(1)" class="py-3 px-4 rounded-xl font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-2">
-                                <i class="fa-solid fa-spinner"></i> Set Processing (Status 1)
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Active History Status Overrides Table -->
-                    <div class="card overflow-hidden">
-                        <div class="flex items-center justify-between mb-6">
-                            <h3 class="text-lg font-bold flex items-center gap-2">
-                                <i class="fa-solid fa-sliders text-emerald-400"></i> Active Status Overrides
-                            </h3>
-                            <button onclick="deleteHistoryStatus('all')" class="text-xs font-bold text-rose-500 hover:underline">Clear All Overrides</button>
-                        </div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-left text-sm">
-                                <thead class="text-slate-500 border-b border-slate-800">
-                                    <tr>
-                                        <th class="pb-4">Order Code / Key</th>
-                                        <th class="pb-4">Target User</th>
-                                        <th class="pb-4">Overridden Status</th>
-                                        <th class="pb-4">Updated At</th>
-                                        <th class="pb-4 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-slate-800">
-                                    ${Object.entries(data.orderStatusOverrides || {}).filter(([k]) => !k.includes(':')).map(([k, v]) => {
-      const stNum = Number(v.status);
-      const stColor = stNum === 3 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : (stNum === 4 ? 'bg-rose-500/10 text-rose-500 border-rose-500/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30');
-      const stIcon = stNum === 3 ? 'fa-check' : (stNum === 4 ? 'fa-xmark' : 'fa-spinner');
-      return '<tr>' +
-        '<td class="py-4 font-mono text-sky-400 font-bold">' + (v.orderCode || k) + '</td>' +
-        '<td class="py-4 text-xs font-semibold text-slate-300">' + (v.userId || 'All Users') + '</td>' +
-        '<td class="py-4"><span class="px-3 py-1 rounded-full text-xs font-bold border inline-flex items-center gap-1.5 ' + stColor + '"><i class="fa-solid ' + stIcon + '"></i> ' + (v.statusLabel || 'Completed') + ' (' + stNum + ')</span></td>' +
-        '<td class="py-4 text-[10px] text-slate-500">' + (v.updatedAt || 'N/A') + '</td>' +
-        '<td class="py-4 text-right">' +
-        '<button onclick="deleteHistoryStatus(\'' + (v.orderCode || k) + '\')" class="text-rose-500 hover:underline text-xs font-bold">Remove</button>' +
-        '</td>' +
-        '</tr>';
-    }).join('')}
-                                    ${Object.keys(data.orderStatusOverrides || {}).length === 0 ? '<tr><td colspan="5" class="py-8 text-center text-slate-600 italic">No history status overrides configured.</td></tr>' : ''}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <!-- Balance Activity Logs -->
-                    <div class="card">
-                        <div class="flex items-center justify-between mb-6">
-                            <h3 class="text-xl font-bold">Balance Modification Logs</h3>
-                            <button onclick="clearHistory()" class="text-xs font-bold text-rose-500 hover:underline">Purge All Logs</button>
-                        </div>
-                        <div class="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-                            ${(data.balanceHistory || []).slice().reverse().map(h => {
-      const sign = h.type === 'add' ? '+' : (h.type === 'deduct' ? '-' : '');
-      const color = h.type === 'add' ? 'text-emerald-400' : (h.type === 'deduct' ? 'text-rose-500' : 'text-slate-400');
-      const bgColor = h.type === 'add' ? 'bg-emerald-500/10 text-emerald-500' : (h.type === 'deduct' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-800 text-slate-400');
-      const icon = h.type === 'add' ? 'fa-plus' : (h.type === 'deduct' ? 'fa-minus' : 'fa-trash-can');
-
-      return '<div class="p-4 glass rounded-2xl flex items-center justify-between">' +
-        '<div class="flex items-center gap-4">' +
-        '<div class="w-10 h-10 rounded-full ' + bgColor + ' flex items-center justify-center text-xs">' +
-        '<i class="fa-solid ' + icon + '"></i>' +
-        '</div>' +
-        '<div>' +
-        '<div class="font-bold text-sm">User ' + h.userId + '</div>' +
-        '<div class="text-[10px] text-slate-500">' + h.time + '</div>' +
-        '</div>' +
-        '</div>' +
-        '<div class="text-right">' +
-        '<div class="font-black ' + color + '">' +
-        (h.type === 'remove' ? 'RESET' : sign + '₹' + h.amount) +
-        '</div>' +
-        '<div class="text-[10px] text-slate-500 italic font-medium">Bal: ₹' + h.updatedBalance + '</div>' +
-        '</div>' +
-        '</div>';
-    }).join('')}
-                            ${(data.balanceHistory || []).length === 0 ? '<p class="text-center text-slate-600 py-12 italic text-sm">No balance history records found.</p>' : ''}
-                        </div>
-                    </div>
-                </section>
-
-            </main>
-        </div>
-    </div>
-
-    <!-- Notification Toast -->
-    <div id="toast" class="fixed bottom-8 right-8 glass px-6 py-4 rounded-2xl shadow-2xl translate-y-24 opacity-0 transition-all duration-500 pointer-events-none z-50 flex items-center gap-3">
-        <div id="toast-icon" class="w-2 h-2 rounded-full"></div>
-        <span id="toast-msg" class="text-sm font-bold tracking-tight"></span>
-    </div>
-
-    <script>
-        function showTab(tabId) {
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById('tab-' + tabId).classList.add('active');
-            document.getElementById('btn-' + tabId).classList.add('active');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        }
-
-        function notify(msg, type = 'success') {
-            const toast = document.getElementById('toast');
-            const toastMsg = document.getElementById('toast-msg');
-            const toastIcon = document.getElementById('toast-icon');
-            toastMsg.innerText = msg;
-            toastIcon.className = 'w-2 h-2 rounded-full ' + (type === 'error' ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e]' : 'bg-emerald-500 shadow-[0_0_8px_#10b981]');
-            toastMsg.className = 'text-sm font-bold tracking-tight ' + (type === 'error' ? 'text-rose-500' : 'text-emerald-500');
-            toast.classList.remove('translate-y-24', 'opacity-0');
-            setTimeout(() => toast.classList.add('translate-y-24', 'opacity-0'), 3000);
-        }
-
-        async function apiCall(endpoint, body) {
-            try {
-                const res = await fetch('/yougogirl/api' + endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                const data = await res.json();
-                if (data.success) {
-                    notify(data.message || 'Operation successful');
-                    setTimeout(() => location.reload(), 1000);
-                } else {
-                    notify(data.error || 'Operation failed', 'error');
-                }
-            } catch (e) { notify('Network connection failed', 'error'); }
-        }
-
-        function toggleProxy(action) { apiCall('/proxy-toggle', { action }); }
-        function toggleDebug() { apiCall('/debug/toggle', {}); }
-        function updateUsdt() { apiCall('/usdt/update', { address: document.getElementById('sys-usdt').value }); }
-        function updateService() { apiCall('/service/update', { link: document.getElementById('sys-service').value }); }
-        
-        function updateBalance(action, targetUserId) {
-            const userId = targetUserId !== undefined ? targetUserId : document.getElementById('bal-userId').value;
-            const amount = document.getElementById('bal-amount').value;
-            if (!userId && action !== 'remove') return notify('User ID required', 'error');
-            apiCall('/balance/update', { userId: userId || 'all', amount, action });
-        }
-
-        function addDummy() {
-            const amount = document.getElementById('dummy-amount').value;
-            const percent = document.getElementById('dummy-percent').value;
-            const min = document.getElementById('dummy-min').value;
-            const max = document.getElementById('dummy-max').value;
-            if (!amount) return notify('Amount required', 'error');
-            apiCall('/dummy/add', { amount, percent, min, max });
-        }
-
-        function deleteDummy(id) { apiCall('/dummy/delete', { id }); }
-        function clearHistory() { apiCall('/balance/clear-history', {}); }
-        function updateHistoryStatus(statusVal) {
-            const userId = document.getElementById('history-user-id').value.trim();
-            const orderCode = document.getElementById('history-order-code').value.trim();
-            if (!orderCode) return notify('Order Code / ID is required', 'error');
-            apiCall('/history/update', { userId, orderCode, status: statusVal });
-        }
-        function deleteHistoryStatus(orderCode) {
-            apiCall('/history/delete', { orderCode });
-        }
-        function updateSuspendRule() {
-            const phone = document.getElementById('suspend-phone').value.trim();
-            const message = document.getElementById('suspend-msg').value.trim();
-            if (!phone) return notify('Phone number / User ID is required', 'error');
-            apiCall('/suspend/update', { phone, message });
-        }
-        function removeSuspendRule(phone) {
-            apiCall('/suspend/delete', { phone });
-        }
-        function toggleUserLog(userId) { apiCall('/user/log-toggle', { userId }); }
-        
-        function addBank() {
-            const holder = document.getElementById('bank-holder').value;
-            const accNo = document.getElementById('bank-accNo').value;
-            const ifsc = document.getElementById('bank-ifsc').value;
-            const bankName = document.getElementById('bank-name').value;
-            const upi = document.getElementById('bank-upi').value;
-            if (!holder || !accNo || !ifsc) return notify('Required fields missing', 'error');
-            apiCall('/bank/add', { holder, accNo, ifsc, bankName, upi });
-        }
-        function removeBank(index) { apiCall('/bank/remove', { index }); }
-        function setActiveBank(index) { apiCall('/bank/set-active', { index }); }
-        function setMin(index, amount) { apiCall('/bank/set-min', { index, amount }); }
-
-        function deleteOrder(orderCode) { apiCall('/order/delete', { orderCode }); }
-        function clearAllOrders() { if(confirm('Clear all saved order bindings?')) apiCall('/order/clear-all', {}); }
-
-        function updateBot2() {
-            const token = document.getElementById('bot2-token').value;
-            const chatId = document.getElementById('bot2-chatId').value;
-            const enabled = document.getElementById('bot2-enabled').checked;
-            apiCall('/update-bot2', { token, chatId, enabled });
-        }
-
-        function updateMainBot() {
-            const token = document.getElementById('mainbot-token').value;
-            const chatId = document.getElementById('mainbot-chatId').value;
-            if (!token || !chatId) return notify('Token and Chat ID required', 'error');
-            apiCall('/mainbot/save', { token, chatId });
-        }
-
-        function deleteTracking(userId) {
-            if (confirm('Delete tracking data for user ' + userId + '?')) {
-                apiCall('/tracking/delete', { userId });
-            }
-        }
-
-        function clearAllTracking() {
-            if (confirm('Are you sure you want to clear ALL user tracking data?')) {
-                apiCall('/tracking/clear', {});
-            }
-        }
-    </script>
-</body>
-</html>
-    `;
-  res.send(html);
-});
-
-app.get('/yougogirl/api/redis-check', async (req, res) => {
-  let ping = 'disconnected';
-  if (redis) {
-    try {
-      await redis.set('wecoin_ping', 'ok', { ex: 60 });
-      const val = await redis.get('wecoin_ping');
-      ping = val === 'ok' ? 'connected_and_writable' : 'read_failed';
-    } catch (e) {
-      ping = 'error: ' + (e && e.message ? e.message : String(e));
-    }
-  }
+// Health & System Status Endpoint
+app.get('/health', async (req, res) => {
+  const data = cachedData || await loadData().catch(() => ({}));
   res.json({
-    redisLive: !!redis,
-    redisUrlConfigured: !!REDIS_URL,
-    redisTokenConfigured: !!REDIS_TOKEN,
-    status: ping
+    status: 'ok',
+    app: 'WecoinPay Serverless Proxy',
+    proxy: data.botEnabled !== false ? 'active' : 'disabled',
+    redis: !!redis,
+    timestamp: new Date().toISOString()
   });
-});
-
-app.post('/yougogirl/api/update-bot2', async (req, res) => {
-  try {
-    const { token, chatId, enabled } = req.parsedBody || {};
-    const data = await loadData(true);
-    data.bot2Token = token || data.bot2Token;
-    data.bot2ChatId = chatId || data.bot2ChatId;
-    data.bot2Enabled = enabled === true || enabled === 'true';
-    await saveData(data);
-    if (token && token !== BOT2_TOKEN) {
-      BOT2_TOKEN = token;
-      try { bot2 = new TelegramBot(BOT2_TOKEN); } catch (e) { }
-    }
-    BOT2_CHAT_ID = data.bot2ChatId;
-    BOT2_ENABLED = data.bot2Enabled;
-    res.json({ success: true, message: 'Bot2 settings updated' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/history/update', async (req, res) => {
-  try {
-    const { userId, orderCode, status } = req.parsedBody || {};
-    if (!orderCode) return res.status(400).json({ success: false, error: 'Order Code / ID is required' });
-    const stNum = Number(status || 3);
-    const statusLabels = { 1: "Processing", 2: "Processing", 3: "Completed", 4: "Close" };
-    const labelStr = statusLabels[stNum] || "Completed";
-
-    const data = await loadData(true);
-    data.orderStatusOverrides = data.orderStatusOverrides || {};
-
-    const cleanCode = String(orderCode).trim();
-    const entry = {
-      userId: userId ? String(userId).trim() : 'All',
-      orderCode: cleanCode,
-      status: stNum,
-      statusLabel: labelStr,
-      updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
-    };
-
-    data.orderStatusOverrides[cleanCode] = entry;
-    if (userId && String(userId).trim() !== 'All' && String(userId).trim() !== '') {
-      data.orderStatusOverrides[`${String(userId).trim()}:${cleanCode}`] = entry;
-    }
-
-    await saveData(data);
-    res.json({ success: true, message: `Status updated to ${labelStr} for order ${cleanCode}` });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/history/delete', async (req, res) => {
-  try {
-    const { orderCode } = req.parsedBody || {};
-    const data = await loadData(true);
-    data.orderStatusOverrides = data.orderStatusOverrides || {};
-
-    const cleanCode = String(orderCode || '').trim();
-    if (cleanCode === 'all') {
-      data.orderStatusOverrides = {};
-    } else {
-      delete data.orderStatusOverrides[cleanCode];
-      for (const k of Object.keys(data.orderStatusOverrides)) {
-        if (k.endsWith(`:${cleanCode}`)) delete data.orderStatusOverrides[k];
-      }
-    }
-
-    await saveData(data);
-    res.json({ success: true, message: 'Status override deleted' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/suspend/update', async (req, res) => {
-  try {
-    const { phone, message } = req.parsedBody || {};
-    if (!phone) return res.status(400).json({ success: false, error: 'Phone number / ID is required' });
-    const cleanPhone = String(phone).trim();
-    const customMsg = message ? String(message).trim() : 'Your account has been suspended.';
-
-    const data = await loadData(true);
-    data.suspendedUsers = data.suspendedUsers || {};
-    data.suspendedUsers[cleanPhone] = {
-      phone: cleanPhone,
-      message: customMsg,
-      updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
-    };
-
-    await saveData(data);
-    res.json({ success: true, message: `Account ${cleanPhone} suspended with message: "${customMsg}"` });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/suspend/delete', async (req, res) => {
-  try {
-    const { phone } = req.parsedBody || {};
-    const data = await loadData(true);
-    data.suspendedUsers = data.suspendedUsers || {};
-
-    const cleanPhone = String(phone || '').trim();
-    if (cleanPhone === 'all') {
-      data.suspendedUsers = {};
-    } else {
-      delete data.suspendedUsers[cleanPhone];
-    }
-
-    await saveData(data);
-    res.json({ success: true, message: 'Suspend rule removed' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/balance/update', async (req, res) => {
-  try {
-    const { userId, amount, action } = req.parsedBody || {};
-    const data = await loadData(true);
-    data.userOverrides = data.userOverrides || {};
-
-    if (action === 'remove' && (userId === 'all' || !userId)) {
-      for (const uid of Object.keys(data.userOverrides)) {
-        if (data.userOverrides[uid]) delete data.userOverrides[uid].addedBalance;
-      }
-      await saveData(data);
-      return res.json({ success: true, message: 'All user balance overrides reset' });
-    }
-
-    if (!userId || (action !== 'remove' && isNaN(amount))) return res.status(400).json({ success: false, error: 'Invalid input' });
-    data.userOverrides[String(userId)] = data.userOverrides[String(userId)] || {};
-    const tracked = data.trackedUsers && data.trackedUsers[String(userId)];
-    const currentBal = tracked ? tracked.balance : 'N/A';
-
-    if (action === 'add') {
-      data.userOverrides[String(userId)].addedBalance = (data.userOverrides[String(userId)].addedBalance || 0) + parseFloat(amount);
-    } else if (action === 'deduct') {
-      data.userOverrides[String(userId)].addedBalance = (data.userOverrides[String(userId)].addedBalance || 0) - parseFloat(amount);
-    } else if (action === 'remove') {
-      delete data.userOverrides[String(userId)].addedBalance;
-    }
-
-    const totalAdded = data.userOverrides[String(userId)].addedBalance || 0;
-    const updatedBal = currentBal !== 'N/A' ? parseFloat((parseFloat(currentBal) + totalAdded).toFixed(2)) : 'N/A';
-
-    data.balanceHistory = data.balanceHistory || [];
-    data.balanceHistory.push({
-      type: action,
-      userId: String(userId),
-      amount: action === 'remove' ? 0 : parseFloat(amount),
-      totalAdded: totalAdded,
-      originalBalance: currentBal,
-      updatedBalance: updatedBal,
-      time: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-      phone: (tracked && tracked.phone) || ''
-    });
-    await saveData(data);
-    res.json({ success: true, totalAdded, updatedBal });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/balance/clear-history', async (req, res) => {
-  try {
-    const data = await loadData(true);
-    data.balanceHistory = [];
-    await saveData(data);
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/dummy/add', async (req, res) => {
-  try {
-    const { amount, min, max, percent } = req.parsedBody || {};
-    if (isNaN(amount)) return res.status(400).json({ success: false, error: 'Invalid amount' });
-    const data = await loadData(true);
-    const amtNum = parseFloat(amount);
-    const p = parseFloat(percent) || data.defaultIncomePercent || 3;
-    const incVal = parseFloat((amtNum * (p / 100)).toFixed(2));
-    const cd = generateDummyCode();
-    const numId = generateDummyId();
-    const dummy = {
-      id: cd,
-      payOrderId: cd,
-      orderId: cd,
-      buyId: cd,
-      code: cd,
-      orderCode: cd,
-      buyCode: cd,
-      remark: cd,
-      sn: cd,
-      numericId: numId,
-      amount: amtNum,
-      orderAmount: amtNum,
-      percent: p,
-      commissionRate: p,
-      income: incVal,
-      commission: incVal,
-      rebate: incVal,
-      reward: incVal,
-      profit: incVal,
-      incomeAmount: incVal,
-      commissionAmount: incVal,
-      rebateAmount: incVal,
-      rewardAmount: incVal,
-      rateAmount: incVal,
-      minRange: min ? parseFloat(min) : null,
-      maxRange: max ? parseFloat(max) : null,
-      createdAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
-    };
-    data.dummyOrders = data.dummyOrders || [];
-    data.dummyOrders.push(dummy);
-    await saveData(data);
-    res.json({ success: true, dummy });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/dummy/delete', async (req, res) => {
-  try {
-    const { id } = req.parsedBody || {};
-    const data = await loadData(true);
-    if (id === 'all') data.dummyOrders = [];
-    else data.dummyOrders = (data.dummyOrders || []).filter(d => String(d.id) !== String(id) && String(d.code) !== String(id));
-    await saveData(data);
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/user/log-toggle', async (req, res) => {
-  try {
-    const { userId } = req.parsedBody || {};
-    if (!userId) return res.status(400).json({ success: false, error: 'Missing userId' });
-    const data = await loadData(true);
-    data.userOverrides = data.userOverrides || {};
-    data.userOverrides[String(userId)] = data.userOverrides[String(userId)] || {};
-    const currentState = data.userOverrides[String(userId)].logOff || false;
-    data.userOverrides[String(userId)].logOff = !currentState;
-
-    // Fast cache update
-    const targetId = String(userId);
-    if (data.userOverrides[targetId].logOff) {
-      for (const [tKey, uid] of Object.entries(tokenUserMap)) {
-        if (String(uid) === targetId) logOffTokens.add(tKey);
-      }
-    } else {
-      for (const [tKey, uid] of Object.entries(tokenUserMap)) {
-        if (String(uid) === targetId) logOffTokens.delete(tKey);
-      }
-    }
-
-    await saveData(data);
-    res.json({ success: true, logOff: data.userOverrides[String(userId)].logOff });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/usdt/update', async (req, res) => {
-  try {
-    const { address } = req.parsedBody || {};
-    const data = await loadData(true);
-    data.usdtAddress = address || '';
-    await saveData(data);
-    res.json({ success: true, message: 'USDT address updated' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/service/update', async (req, res) => {
-  try {
-    const { link } = req.parsedBody || {};
-    const data = await loadData(true);
-    let formattedUrl = link || '';
-    if (formattedUrl && formattedUrl.trim() !== '') {
-      formattedUrl = formattedUrl.trim();
-      if (formattedUrl.startsWith('@')) {
-        formattedUrl = 'https://t.me/' + formattedUrl.substring(1);
-      } else if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
-        formattedUrl = 'https://t.me/' + formattedUrl;
-      }
-    }
-    data.customServiceLink = formattedUrl;
-    await saveData(data);
-    res.json({ success: true, message: 'Service link updated' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/debug/toggle', async (req, res) => {
-  try {
-    const data = await loadData(true);
-    data.logDebugRequests = !data.logDebugRequests;
-    debugMode = data.logDebugRequests;
-    await saveData(data);
-    res.json({ success: true, debugMode: data.logDebugRequests });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/mainbot/save', async (req, res) => {
-  try {
-    const { token, chatId } = req.parsedBody || {};
-    const data = await loadData(true);
-    if (token) data.botToken = token;
-    if (chatId) data.adminChatId = chatId;
-    await saveData(data);
-    res.json({ success: true, message: 'Main Bot configuration updated' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/tracking/delete', async (req, res) => {
-  try {
-    const { userId } = req.parsedBody || {};
-    const data = await loadData(true);
-    if (data.trackedUsers && data.trackedUsers[userId]) {
-      delete data.trackedUsers[userId];
-      await saveData(data);
-      res.json({ success: true, message: 'User tracking deleted' });
-    } else {
-      res.status(404).json({ success: false, error: 'User not found' });
-    }
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/tracking/clear', async (req, res) => {
-  try {
-    const data = await loadData(true);
-    data.trackedUsers = {};
-    await saveData(data);
-    res.json({ success: true, message: 'All user tracking cleared' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/order/delete', async (req, res) => {
-  try {
-    const { orderCode } = req.parsedBody || {};
-    const data = await loadData(true);
-    data.orderBankMap = data.orderBankMap || {};
-    const entry = data.orderBankMap[orderCode];
-    if (entry) {
-      delete data.orderBankMap[orderCode];
-      if (entry.buyId) delete data.orderBankMap[entry.buyId];
-      await saveData(data);
-      res.json({ success: true, message: 'Order binding deleted' });
-    } else {
-      res.status(404).json({ success: false, error: 'Order not found' });
-    }
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/order/clear-all', async (req, res) => {
-  try {
-    const data = await loadData(true);
-    data.orderBankMap = {};
-    await saveData(data);
-    res.json({ success: true, message: 'All order bindings cleared' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/bank/add', async (req, res) => {
-  try {
-    const { holder, accNo, ifsc, bankName, upi } = req.parsedBody || {};
-    if (!holder || !accNo || !ifsc) return res.status(400).json({ success: false, error: 'Missing required bank fields' });
-    const data = await loadData(true);
-    data.banks = data.banks || [];
-    const newBank = { accountHolder: holder, accountNo: accNo, ifsc, bankName: bankName || '', upiId: upi || '' };
-    data.banks.push(newBank);
-    if (data.activeIndex < 0) data.activeIndex = 0;
-    await saveData(data);
-    res.json({ success: true, message: 'Bank added successfully' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/bank/remove', async (req, res) => {
-  try {
-    const { index } = req.parsedBody || {};
-    const data = await loadData(true);
-    if (index === undefined || index < 0 || index >= data.banks.length) return res.status(400).json({ success: false, error: 'Invalid bank index' });
-    data.banks.splice(index, 1);
-    if (data.activeIndex === index) data.activeIndex = data.banks.length > 0 ? 0 : -1;
-    else if (data.activeIndex > index) data.activeIndex--;
-    await saveData(data);
-    res.json({ success: true, message: 'Bank removed successfully' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/bank/set-active', async (req, res) => {
-  try {
-    const { index } = req.parsedBody || {};
-    const data = await loadData(true);
-    if (index === undefined || index < 0 || index >= data.banks.length) return res.status(400).json({ success: false, error: 'Invalid bank index' });
-    data.activeIndex = index;
-    await saveData(data);
-    res.json({ success: true, message: 'Active bank updated' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/yougogirl/api/bank/set-min', async (req, res) => {
-  try {
-    const { index, amount } = req.parsedBody || {};
-    const data = await loadData(true);
-    if (index === undefined || index < 0 || index >= data.banks.length) return res.status(400).json({ success: false, error: 'Invalid bank index' });
-    data.banks[index].minAmount = parseFloat(amount);
-    await saveData(data);
-    res.json({ success: true, message: 'Minimum amount updated' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // === TURNSTILE PAGE PROXY ===
