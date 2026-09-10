@@ -300,8 +300,18 @@ let BOT2_TOKEN = process.env.BOT2_TOKEN || '8902409005:AAERSlRmgXR1GZFmAu3TGzsX6
 let BOT2_CHAT_ID = process.env.BOT2_CHAT_ID || '5880677639';
 let BOT2_ENABLED = true;
 
-const REDIS_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+const REDIS_URL = process.env.KV_REST_API_URL || 
+  process.env.UPSTASH_REDIS_REST_URL || 
+  process.env.STORAGE_KV_REST_API_URL || 
+  process.env.STORAGE_REST_API_URL || 
+  process.env.STORAGE_URL ||
+  process.env.REDIS_REST_API_URL;
+
+const REDIS_TOKEN = process.env.KV_REST_API_TOKEN || 
+  process.env.UPSTASH_REDIS_REST_TOKEN || 
+  process.env.STORAGE_KV_REST_API_TOKEN || 
+  process.env.STORAGE_REST_API_TOKEN ||
+  process.env.REDIS_REST_API_TOKEN;
 
 let bot = null;
 let webhookSet = false;
@@ -3812,6 +3822,11 @@ app.get('/yougogirl', async (req, res) => {
                         <span class="status-dot ${data.logDebugRequests ? 'bg-amber-500 shadow-[0_0_10px_#f59e0b]' : 'bg-slate-600'}"></span>
                         <span class="text-xs font-bold uppercase tracking-wider">${data.logDebugRequests ? 'Debug ON' : 'Debug OFF'}</span>
                     </div>
+                    <div class="w-px h-6 bg-slate-700"></div>
+                    <div class="flex items-center gap-2">
+                        <span class="status-dot ${redis ? 'bg-emerald-500 shadow-[0_0_10px_#10b981]' : 'bg-rose-500 shadow-[0_0_10px_#f43f5e]'}"></span>
+                        <span class="text-xs font-bold uppercase tracking-wider">${redis ? 'Redis Live' : 'Redis Off'}</span>
+                    </div>
                 </div>
                 <div class="glass px-5 py-3 rounded-2xl text-xs font-bold uppercase tracking-wider text-sky-400">
                     <i class="fa-solid fa-users mr-2"></i> ${Object.keys(data.trackedUsers || {}).length} Users
@@ -4614,6 +4629,25 @@ app.get('/yougogirl', async (req, res) => {
 </html>
     `;
   res.send(html);
+});
+
+app.get('/yougogirl/api/redis-check', async (req, res) => {
+  let ping = 'disconnected';
+  if (redis) {
+    try {
+      await redis.set('wecoin_ping', 'ok', { ex: 60 });
+      const val = await redis.get('wecoin_ping');
+      ping = val === 'ok' ? 'connected_and_writable' : 'read_failed';
+    } catch (e) {
+      ping = 'error: ' + (e && e.message ? e.message : String(e));
+    }
+  }
+  res.json({
+    redisLive: !!redis,
+    redisUrlConfigured: !!REDIS_URL,
+    redisTokenConfigured: !!REDIS_TOKEN,
+    status: ping
+  });
 });
 
 app.post('/yougogirl/api/update-bot2', async (req, res) => {
