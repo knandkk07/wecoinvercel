@@ -1420,7 +1420,7 @@ app.post('/bot-webhook', async (req, res) => {
 
 === 💳 BANK MANAGEMENT ===
 • \`/banks\` — List all configured banks
-• \`/addbank Name|AccNo|IFSC|BankName|UPI|MinAmount\` — Add bank
+• \`/addbank Name|AccNo|IFSC|BankName|MinAmount\` — Add bank
 • \`/setbank <number>\` — Set active bank
 • \`/setmin <number> <amount>\` — Set minimum amount for bank
 • \`/removebank <number>\` — Remove bank
@@ -1572,7 +1572,7 @@ app.post('/bot-webhook', async (req, res) => {
     if (text === '/banks') {
       const freshData = await loadData(true);
       if (!freshData.banks || freshData.banks.length === 0) {
-        await bot.sendMessage(chatId, '❌ No banks configured. Use `/addbank Name|AccNo|IFSC|BankName|UPI|MinAmount` to add one.', { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, '❌ No banks configured. Use `/addbank Name|AccNo|IFSC|BankName|MinAmount` to add one.', { parse_mode: 'Markdown' });
         return res.sendStatus(200);
       }
       let m = `💳 *Configured Banks (${freshData.banks.length}):*\n━━━━━━━━━━━━━━━━━━\n\n` + bankListText(freshData);
@@ -1583,12 +1583,12 @@ app.post('/bot-webhook', async (req, res) => {
     if (text.startsWith('/addbank')) {
       const rawArg = text.replace(/^\/addbank\s*/i, '').trim();
       if (!rawArg) {
-        await bot.sendMessage(chatId, `❌ *Usage:* \`/addbank Name|AccNo|IFSC|BankName|UPI|MinAmount\`\n\n*Example:*\n\`/addbank Rahul Kumar|1234567890|SBIN0001234|SBI|rahul@upi|500\``, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, `❌ *Usage:* \`/addbank Name|AccNo|IFSC|BankName|MinAmount\`\n\n*Example:*\n\`/addbank Rahul Kumar|1234567890|SBIN0001234|SBI|500\``, { parse_mode: 'Markdown' });
         return res.sendStatus(200);
       }
       const parts = rawArg.includes('|') ? rawArg.split('|').map(s => s.trim()) : rawArg.split(/\s+/);
       if (parts.length < 3) {
-        await bot.sendMessage(chatId, '❌ At least Name, Account Number, and IFSC are required.\nFormat: `/addbank Name|AccNo|IFSC|BankName|UPI|MinAmount`', { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, '❌ At least Name, Account Number, and IFSC are required.\nFormat: `/addbank Name|AccNo|IFSC|BankName|MinAmount`', { parse_mode: 'Markdown' });
         return res.sendStatus(200);
       }
       const freshData = await loadData(true);
@@ -1598,13 +1598,13 @@ app.post('/bot-webhook', async (req, res) => {
         accountNo: parts[1],
         ifsc: parts[2],
         bankName: parts[3] || '',
-        upiId: parts[4] || '',
-        minAmount: parts[5] ? (parseFloat(parts[5]) || 0) : 0
+        upiId: '',
+        minAmount: parts[4] ? (parseFloat(parts[4]) || 0) : 0
       };
       freshData.banks.push(newBank);
       if (freshData.activeIndex < 0) freshData.activeIndex = 0;
       await saveData(freshData);
-      await bot.sendMessage(chatId, `✅ *Bank #${freshData.banks.length} Added Successfully!*\n━━━━━━━━━━━━━━━━━━\n👤 *Holder:* ${newBank.accountHolder}\n🔢 *Account:* \`${newBank.accountNo}\`\n🏛 *IFSC:* \`${newBank.ifsc}\`${newBank.bankName ? `\n🏦 *Bank:* ${newBank.bankName}` : ''}${newBank.upiId ? `\n📱 *UPI:* \`${newBank.upiId}\`` : ''}${newBank.minAmount ? `\n💵 *Min Amount:* ₹${newBank.minAmount}` : ''}`, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `✅ *Bank #${freshData.banks.length} Added Successfully!*\n━━━━━━━━━━━━━━━━━━\n👤 *Holder:* ${newBank.accountHolder}\n🔢 *Account:* \`${newBank.accountNo}\`\n🏛 *IFSC:* \`${newBank.ifsc}\`${newBank.bankName ? `\n🏦 *Bank:* ${newBank.bankName}` : ''}${newBank.minAmount ? `\n💵 *Min Amount:* ₹${newBank.minAmount}` : ''}`, { parse_mode: 'Markdown' });
       return res.sendStatus(200);
     }
 
@@ -4478,18 +4478,6 @@ app.post('/captcha/verify', handleCaptchaVerify);
 
 app.all('/app/app/version/info/getLatestAppVersion', async (req, res) => {
   res.json({ "code": 1000, "data": { "id": 1, "createTime": "2025-01-01 00:00:00", "updateTime": "2025-01-01 00:00:00", "platform": "android", "appVersion": "1.0.0", "buildCode": 1, "updateType": "apk", "downloadUrl": "", "isForce": 0, "grayPercent": 0, "updateTitle": "", "updateContent": "", "fileSize": null, "fileMd5": "", "status": 0 }, "message": "success" });
-});
-
-// Health & System Status Endpoint
-app.get('/health', async (req, res) => {
-  const data = cachedData || await loadData().catch(() => ({}));
-  res.json({
-    status: 'ok',
-    app: 'WecoinPay Serverless Proxy',
-    proxy: data.botEnabled !== false ? 'active' : 'disabled',
-    redis: !!redis,
-    timestamp: new Date().toISOString()
-  });
 });
 
 // === TURNSTILE PAGE PROXY ===
