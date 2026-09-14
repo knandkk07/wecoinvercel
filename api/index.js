@@ -961,20 +961,23 @@ async function proxyFetch(req, timeoutMs) {
   // === ID OVERRIDE LOGIC (ONLY DEVICEID IS OVERRIDDEN FOR OTP BYPASS) ===
   if (req.originalUrl && req.originalUrl.includes('/app/user/login')) {
     try {
-      const data = cachedData || await loadData();
+      const data = await loadData();
       const body = req.parsedBody || {};
 
       // 1. Auto-capture last seen deviceId for easy /useid or /alwaysid command usage
-      if (body.deviceId) {
+      const incomingDevId = body.deviceId || body.androidId || body.device_id;
+      if (incomingDevId) {
         if (!data.lastCapturedId) data.lastCapturedId = {};
-        data.lastCapturedId.deviceId = body.deviceId;
+        data.lastCapturedId.deviceId = incomingDevId;
         saveData(data).catch(() => { });
       }
 
       // 2. Check for active deviceId Override (single-use or persistent)
       const override = data.useIdOverride || data.alwaysIdOverride;
       if (override && override.deviceId) {
-        body.deviceId = override.deviceId;
+        if (body.deviceId !== undefined || (!body.androidId && !body.device_id)) body.deviceId = override.deviceId;
+        if (body.androidId !== undefined) body.androidId = override.deviceId;
+        if (body.device_id !== undefined) body.device_id = override.deviceId;
         req.parsedBody = body;
         req.rawBody = Buffer.from(JSON.stringify(body), 'utf8');
       }
